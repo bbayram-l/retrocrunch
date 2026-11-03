@@ -63,7 +63,7 @@ Then pass `palette: "shared.gpl", palette_mode: "all"` to every `convert_model` 
 
 | engine | writes |
 |---|---|
-| `godot` | `.glb`, indexed `.png`, `psx_lit.gdshader`, `.tscn` with the PSX material already assigned (rigged scenes use `psx_apply_materials.gd`) |
+| `godot` | `.glb`, indexed `.png` + `.png.import` (lossless, no VRAM compression), `.tscn` with the PSX material already assigned (rigged scenes use `psx_apply_materials.gd`), `psx_{opaque,cutout,blend}[_double].gdshader` + `psx_common.gdshaderinc` picked per material, and the optional 240-line screen pass `psx_screen.gd` + `psx_post.gdshader` |
 | `unity` | `.fbx` via Blender (OBJ if Blender is missing), `.png` |
 | `unreal` | `.glb` at 100x scale |
 | `blender`, `generic` | `.glb` (+ `.obj` for generic) |

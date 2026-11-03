@@ -93,7 +93,7 @@ impl Piece {
     /// Remove triangles that reference vertices past the end of `vertices`.
     pub fn drop_invalid_triangles(&mut self) {
         let n = self.vertices.len();
-        if self.indices.iter().all(|&i| (i as usize) < n) && self.indices.len() % 3 == 0 {
+        if self.indices.iter().all(|&i| (i as usize) < n) && self.indices.len().is_multiple_of(3) {
             return;
         }
         self.indices = self
@@ -285,6 +285,8 @@ pub struct Material {
     /// glTF layout: roughness in G, metalness in B.
     pub metal_rough: Option<RgbaImage>,
     pub emissive_factor: [f32; 3],
+    /// Draw both faces (glTF doubleSided): no back-face culling.
+    pub double_sided: bool,
 }
 
 impl Default for Material {
@@ -301,6 +303,7 @@ impl Default for Material {
             metal_rough: None,
             // glTF semantics: emission = factor x texture, black by default.
             emissive_factor: [0.0; 3],
+            double_sided: false,
         }
     }
 }
@@ -697,6 +700,7 @@ fn load_gltf(path: &Path) -> Result<Model> {
                 roughness: pbr.roughness_factor(),
                 metal_rough: tex(pbr.metallic_roughness_texture().map(|i| i.texture())),
                 emissive_factor: m.emissive_factor(),
+                double_sided: m.double_sided(),
             }
         })
         .collect();

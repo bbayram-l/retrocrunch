@@ -1217,7 +1217,7 @@ impl ModelTab {
                         &mut s.texture.dither_amount,
                         0.0..=64.0,
                         12.0,
-                        "",
+                        "With a palette: how much the two nearest palette colours mix (16 = full, 0 = nearest only). RGB555 only: offset in 8-bit units, like the PS1 GPU (its table is +-4).",
                     );
                 }
             }

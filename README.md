@@ -25,6 +25,7 @@ Requires the Rust MSVC toolchain plus the Visual Studio C++ build tools (meshopt
 
 - Drag and drop files onto the window: models go to **Model**, palettes (`.gpl .pal .act .hex .txt`) go to the palette library, and images go to the current image tab.
 - **Model viewport**: LMB orbit, RMB/MMB or Shift+LMB pan, wheel zoom. Header toggles cover jitter, affine UVs, dither, 15-bit colour, Z-buffer (off = PS1 ordering-table sorting), textures, fog, turntable and resolution (224p / 240p / 480i / native).
+- **Palettes** are built and matched in Oklab, so colours go where the eye sees differences. With a palette, dithering mixes each texel's two nearest palette colours with the ordered matrix (Bayer or the PS1 table), positioned in linear light; `dither amount` 16 is full mixing. Without a palette (RGB555 only) dithering is the PS1 GPU's offset before truncation.
 - **HD texture** (Texture > Quality > HD, `--hd-texture`, MCP `hd_texture`): low-poly PS1 geometry wearing the source's full-resolution, full-colour texture. The new atlas is sized to keep the source's texel density (up to 4096 px); with Keep original UVs the source textures pass through untouched. No palette, dither or 15-bit snap; texels stay pixel-sharp (nearest filtering, mipmapped in the Godot shader so big textures don't shimmer). The PS1 screen effects (jitter, affine, dither) still apply in the viewport and the Godot shader.
 - **Presets**: the Preset picker applies a built-in template or one of your saved presets. Its `...` menu has Save as preset, Import/Export preset file, Delete, Open presets folder and Reload. "(modified)" shows when you've changed settings since applying. User presets are JSON files in `%APPDATA%\psx-forge\presets` (or `~/.config/psx-forge/presets`; override with `PSXFORGE_PRESETS`).
 - **Revert to defaults** resets the tab's settings; **Clear** unloads the current asset and keeps the settings. Both are on every tab (Blocks has Defaults; New clears the level).
@@ -106,10 +107,23 @@ Model files are treated as untrusted. Textures, MTL files and glTF buffers refer
 
 ## Godot 4 workflow
 
-The Godot preset writes `name.glb`, `name.png` (indexed, nearest), `psx_lit.gdshader` and `name.tscn`.
+The Godot preset writes `name.glb`, `name.png` (indexed, nearest) with a `name.png.import`, `name.tscn`, the PSX shaders and the screen pass.
 Copy the folder into your project and instance the `.tscn`: every mesh already has the PSX material.
-The material does vertex snapping to `snap_resolution`, affine UVs (`affine_weight` 0-1 blends from perspective-correct to full PS1 warping), vertex-colour lighting, 15-bit colour with the PS1 dither table, and optional fog. The viewport's "warp" value uses the same maths.
-Use the shader on any other mesh too.
+
+**Materials.** Each material gets the shader variant it needs, chosen from its alpha and glTF `doubleSided`:
+
+| shader | used for |
+|---|---|
+| `psx_opaque.gdshader` | solid surfaces (no `discard`, keeps the early depth test) |
+| `psx_cutout.gdshader` | 1-bit alpha (foliage, fences, hair cards): alpha scissor, stays in the opaque pass |
+| `psx_blend.gdshader` | partial alpha or base-colour alpha < 1: alpha blending |
+| `*_double.gdshader` | the same, with both faces drawn |
+
+They share `psx_common.gdshaderinc`: vertex snapping to `snap_lines` (the width follows the viewport's aspect), affine UVs, colour and fog (`affine_weight` 0-1 blends from perspective-correct to full PS1 warping), vertex-colour lighting, 15-bit colour with the PS1 dither table, and optional fog. The colour maths match psx-forge's preview: texture x vertex colour x tint in 8-bit sRGB values, truncated like the hardware. In Godot 4.7 a render of an exported model matches the preview for 95.8% of pixels exactly (99.5% within 8 levels); keep the Environment tonemap on Linear. The viewport's "warp" value uses the same maths. Use the shaders on any other mesh too.
+
+**Screen pass.** `psx_screen.gd` + `psx_post.gdshader`: add a Control with the script to your main scene and put the 3D level (camera included) under it. It renders at 240 lines (width from the window's aspect), upscales with nearest filtering and applies the PS1 dither and 15-bit colour once per virtual pixel, like the real GPU, switching those off in the psx materials under it. Mouse and keyboard input are forwarded into the low-resolution viewport; Controls under it stay at full resolution on top.
+
+**Import settings.** The `.png.import` files keep textures lossless without VRAM compression (Godot's "Detect 3D" would otherwise compress them and smear the palette) and keep transparent texels exact. HD textures (over 512 px) get mipmaps, sampled with nearest-mipmap filtering.
 
 Rigged models import with a `Skeleton3D`, a skinned mesh and an `AnimationPlayer` holding every clip. Godot moves skinned meshes under the skeleton, so their `.tscn` uses `psx_apply_materials.gd` (a `@tool` script on the root) to assign the PSX materials by material name.
 

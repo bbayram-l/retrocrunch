@@ -69,7 +69,7 @@ impl RenderScene {
                         .collect(),
                     indices: p.indices.clone(),
                     texture: if textured { p.material } else { None },
-                    double_sided: false,
+                    double_sided: mat.is_some_and(|m| m.double_sided),
                     normals: p.vertices.iter().map(|v| v.normal).collect(),
                     vertex_colors: p.vertices.iter().map(|v| v.color).collect(),
                     material: p.material,
@@ -224,7 +224,7 @@ impl Viewport {
                         .max_decimals(2)
                         .prefix("warp "),
                 )
-                .on_hover_text("Same as affine_weight in psx_lit.gdshader: 0 = perspective-correct, 1 = full PS1 warping");
+                .on_hover_text("Same as affine_weight in the Godot psx_*.gdshader materials: 0 = perspective-correct, 1 = full PS1 warping");
             }
             ui.toggle_value(&mut self.opts.dither, "Dither")
                 .on_hover_text("PS1 GPU 4x4 dither table");

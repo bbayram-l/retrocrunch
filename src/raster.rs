@@ -616,7 +616,7 @@ fn raster_tri(band: &mut Band, t: &Tri, o: &RasterOptions, lights: &Lights) {
             if o.zbuffer && z >= band.depth[idx] {
                 continue;
             }
-            // Same blend as psx_lit.gdshader: q = 1 is affine, q = 1/w perspective-correct.
+            // Same blend as psx_common.gdshaderinc: q = 1 is affine, q = 1/w perspective-correct.
             let (l0, l1, l2) = (w0 * qa, w1 * qb, w2 * qc);
             let k = 1.0 / (l0 + l1 + l2);
             let uv = (a.uv * l0 + b.uv * l1 + c.uv * l2) * k;

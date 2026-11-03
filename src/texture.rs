@@ -111,7 +111,8 @@ pub struct CrunchSettings {
     pub palette_mode: PaletteMode,
     pub rgb555: bool,
     pub dither: DitherMode,
-    /// Dither amplitude in 8-bit units (PS1 table is +-4; palettes need more).
+    /// With a palette: mixing strength between the two nearest entries
+    /// (`PALETTE_DITHER_FULL` = full). Without (RGB555 only): offset in 8-bit units.
     pub dither_amount: f32,
     pub alpha: AlphaMode,
     pub alpha_threshold: u8,
@@ -297,6 +298,20 @@ pub fn adjust(img: &mut RgbaImage, brightness: f32, contrast: f32, saturation: f
     }
 }
 
+/// Ordered-dither threshold in 0..1 for palette mixing (None = no dithering).
+fn dither_threshold(mode: DitherMode, x: u32, y: u32) -> Option<f32> {
+    match mode {
+        DitherMode::None => None,
+        DitherMode::Bayer4 => Some(bayer4(x, y) + 0.5 + 1.0 / 32.0),
+        DitherMode::Ps1Table => {
+            Some((PS1_DITHER[(y % 4) as usize][(x % 4) as usize] as f32 + 4.5) / 8.0)
+        }
+    }
+}
+
+/// With a palette, `dither_amount` 16 means full mixing between neighbouring entries.
+pub const PALETTE_DITHER_FULL: f32 = 16.0;
+
 fn dither_offset(mode: DitherMode, amount: f32, x: u32, y: u32) -> f32 {
     match mode {
         DitherMode::None => 0.0,
@@ -314,14 +329,14 @@ fn opaque_pixels(img: &RgbaImage, threshold: u8) -> Vec<Rgb> {
         .collect()
 }
 
-/// Build the palette that `crunch` would use for this (already resized) image.
 /// Whether quantising `img` with `s` leaves cutout (fully transparent) texels, which
 /// need their own CLUT entry.
 pub fn has_cutout_texels(img: &RgbaImage, s: &CrunchSettings) -> bool {
     s.alpha == AlphaMode::Cutout && img.pixels().any(|p| p.0[3] < s.alpha_threshold)
 }
 
-/// Palette for the opaque `pixels`. With `reserve_transparent`, one CLUT slot is left
+/// Build the palette that `crunch` would use for this (already resized) image:
+/// the colours of the opaque `pixels`. With `reserve_transparent`, one CLUT slot is left
 /// free for the transparent entry, so a 16-colour cutout texture still fits 4 bits.
 pub fn build_palette(
     pixels: &[Rgb],
@@ -367,16 +382,27 @@ pub fn quantize(img: &RgbaImage, s: &CrunchSettings, pal: &[Rgb]) -> RgbaImage {
             }
             AlphaMode::Keep => {}
         }
-        let off = dither_offset(s.dither, s.dither_amount, x, y);
-        let c = [
-            (p.0[0] as f32 + off).clamp(0.0, 255.0) as u8,
-            (p.0[1] as f32 + off).clamp(0.0, 255.0) as u8,
-            (p.0[2] as f32 + off).clamp(0.0, 255.0) as u8,
-        ];
         let q = match &lut {
-            Some(l) => pal[l.lookup(c) as usize],
-            None if s.rgb555 => palette::snap_rgb555(c),
-            None => c,
+            // Palette: mix the two nearest entries with the ordered matrix. Adding a
+            // fixed offset instead barely dithers sparse palettes and adds noise to dense ones.
+            Some(l) => {
+                let c = [p.0[0], p.0[1], p.0[2]];
+                let i = match dither_threshold(s.dither, x, y) {
+                    Some(t) => l.lookup_mixed(c, t, s.dither_amount / PALETTE_DITHER_FULL),
+                    None => l.lookup(c),
+                };
+                pal[i as usize]
+            }
+            // No palette (RGB555 only): the PS1 GPU's way, an offset before truncation.
+            None => {
+                let off = dither_offset(s.dither, s.dither_amount, x, y);
+                let c = [
+                    (p.0[0] as f32 + off).clamp(0.0, 255.0) as u8,
+                    (p.0[1] as f32 + off).clamp(0.0, 255.0) as u8,
+                    (p.0[2] as f32 + off).clamp(0.0, 255.0) as u8,
+                ];
+                if s.rgb555 { palette::snap_rgb555(c) } else { c }
+            }
         };
         p.0[0] = q[0];
         p.0[1] = q[1];
@@ -545,6 +571,41 @@ mod tests {
         assert!(pal.len() <= 16, "CLUT {}", pal.len());
         assert_eq!(pal[0], [0, 0, 0, 0]);
         assert_eq!(idx[0], 0, "transparent texel uses index 0");
+    }
+
+    #[test]
+    fn palette_dither_mixes_two_nearest_by_position() {
+        // A flat colour a quarter of the way from black to white (in linear light).
+        let grey = {
+            let l = 0.25f32;
+            let v = 1.055 * l.powf(1.0 / 2.4) - 0.055;
+            (v * 255.0).round() as u8
+        };
+        let img = RgbaImage::from_pixel(16, 16, image::Rgba([grey, grey, grey, 255]));
+        let pal = vec![[0, 0, 0], [255, 255, 255]];
+        let count_white = |s: &CrunchSettings| {
+            quantize(&img, s, &pal)
+                .pixels()
+                .filter(|p| p.0[0] == 255)
+                .count()
+        };
+        let mut s = CrunchSettings {
+            dither: DitherMode::Bayer4,
+            dither_amount: PALETTE_DITHER_FULL,
+            alpha: AlphaMode::Opaque,
+            ..Default::default()
+        };
+        let white = count_white(&s);
+        assert!((56..=72).contains(&white), "~25% white, got {white}/256");
+        s.dither = DitherMode::None;
+        assert_eq!(
+            count_white(&s),
+            256,
+            "no dither: plain nearest (perceptually white)"
+        );
+        s.dither = DitherMode::Ps1Table;
+        let ps1 = count_white(&s);
+        assert!((32..=96).contains(&ps1), "PS1 table mixes too, got {ps1}");
     }
 
     #[test]

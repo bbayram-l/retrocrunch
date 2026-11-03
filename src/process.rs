@@ -556,8 +556,15 @@ pub fn convert(
                         v.color = [1.0, 1.0, 1.0, 1.0];
                     }
                 }
+                // One atlas material: double-sided if any source surface was.
+                let double_sided = src_pieces.iter().any(|p| {
+                    p.material
+                        .and_then(|m| model.materials.get(m))
+                        .is_some_and(|m| m.double_sided)
+                });
                 atlas_materials = Some(vec![Material {
                     name: format!("{}_atlas", model.name),
+                    double_sided,
                     albedo: Some(img),
                     ..Default::default()
                 }]);

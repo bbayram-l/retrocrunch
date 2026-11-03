@@ -15,54 +15,174 @@ pub fn snap_rgb555(c: Rgb) -> Rgb {
     [s(c[0]), s(c[1]), s(c[2])]
 }
 
-/// Perceptually weighted squared RGB distance ("redmean").
+// ---------------------------------------------------------------- colour spaces
+//
+// Palettes are built and matched in Oklab (perceptually uniform: equal distances look
+// equally different), and dithered colours mix in linear light, as they do on screen.
+
+fn linear_table() -> &'static [f32; 256] {
+    static T: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    T.get_or_init(|| {
+        std::array::from_fn(|i| {
+            let c = i as f32 / 255.0;
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        })
+    })
+}
+
+/// sRGB bytes to linear light (0..1).
 #[inline]
-pub fn color_dist(a: Rgb, b: Rgb) -> i32 {
-    let rmean = (a[0] as i32 + b[0] as i32) / 2;
-    let dr = a[0] as i32 - b[0] as i32;
-    let dg = a[1] as i32 - b[1] as i32;
-    let db = a[2] as i32 - b[2] as i32;
-    (((512 + rmean) * dr * dr) >> 8) + 4 * dg * dg + (((767 - rmean) * db * db) >> 8)
+pub fn to_linear(c: Rgb) -> [f32; 3] {
+    let t = linear_table();
+    [t[c[0] as usize], t[c[1] as usize], t[c[2] as usize]]
+}
+
+fn from_linear(l: [f32; 3]) -> Rgb {
+    l.map(|v| {
+        let v = v.clamp(0.0, 1.0);
+        let s = if v <= 0.003_130_8 {
+            v * 12.92
+        } else {
+            1.055 * v.powf(1.0 / 2.4) - 0.055
+        };
+        (s * 255.0).round().clamp(0.0, 255.0) as u8
+    })
+}
+
+fn oklab_from_linear([r, g, b]: [f32; 3]) -> [f32; 3] {
+    let l = (0.412_221_46 * r + 0.536_332_55 * g + 0.051_445_995 * b).cbrt();
+    let m = (0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b).cbrt();
+    let s = (0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b).cbrt();
+    [
+        0.210_454_26 * l + 0.793_617_8 * m - 0.004_072_047 * s,
+        1.977_998_5 * l - 2.428_592_2 * m + 0.450_593_7 * s,
+        0.025_904_037 * l + 0.782_771_77 * m - 0.808_675_77 * s,
+    ]
+}
+
+fn linear_from_oklab([ll, a, b]: [f32; 3]) -> [f32; 3] {
+    let l = (ll + 0.396_337_78 * a + 0.215_803_76 * b).powi(3);
+    let m = (ll - 0.105_561_346 * a - 0.063_854_17 * b).powi(3);
+    let s = (ll - 0.089_484_18 * a - 1.291_485_5 * b).powi(3);
+    [
+        4.076_741_7 * l - 3.307_711_6 * m + 0.230_969_94 * s,
+        -1.268_438 * l + 2.609_757_4 * m - 0.341_319_38 * s,
+        -0.004_196_086_3 * l - 0.703_418_6 * m + 1.707_614_7 * s,
+    ]
+}
+
+/// sRGB bytes to Oklab.
+#[inline]
+pub fn oklab(c: Rgb) -> [f32; 3] {
+    oklab_from_linear(to_linear(c))
+}
+
+/// Oklab back to sRGB bytes.
+pub fn from_oklab(lab: [f32; 3]) -> Rgb {
+    from_linear(linear_from_oklab(lab))
+}
+
+/// Squared perceptual (Oklab) distance.
+#[inline]
+pub fn color_dist(a: Rgb, b: Rgb) -> f32 {
+    lab_dist(&oklab(a), &oklab(b))
+}
+
+#[inline]
+fn lab_dist(a: &[f32; 3], b: &[f32; 3]) -> f32 {
+    let (x, y, z) = (a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    x * x + y * y + z * z
+}
+
+/// Nearest and second-nearest palette entries (the same index twice for one entry).
+fn nearest_two(lab: &[f32; 3], labs: &[[f32; 3]]) -> (usize, usize) {
+    let (mut b1, mut b2) = (0, 0);
+    let (mut d1, mut d2) = (f32::MAX, f32::MAX);
+    for (i, p) in labs.iter().enumerate() {
+        let d = lab_dist(lab, p);
+        if d < d1 {
+            (b2, d2) = (b1, d1);
+            (b1, d1) = (i, d);
+        } else if d < d2 {
+            (b2, d2) = (i, d);
+        }
+    }
+    if d2 == f32::MAX { (b1, b1) } else { (b1, b2) }
 }
 
 pub fn nearest_index(c: Rgb, palette: &[Rgb]) -> usize {
-    let mut best = 0;
-    let mut best_d = i32::MAX;
-    for (i, &p) in palette.iter().enumerate() {
-        let d = color_dist(c, p);
-        if d < best_d {
-            best_d = d;
-            best = i;
-        }
-    }
-    best
+    let labs: Vec<[f32; 3]> = palette.iter().map(|&p| oklab(p)).collect();
+    nearest_two(&oklab(c), &labs).0
 }
 
-/// 32x32x32 lookup table mapping RGB555 cells to palette indices.
-/// Makes per-pixel palette mapping O(1) instead of O(palette).
+/// 32x32x32 lookup table mapping RGB555 cells to their nearest two palette entries
+/// (Oklab). Makes per-pixel palette mapping O(1) instead of O(palette).
 pub struct PaletteLut {
-    table: Vec<u8>,
+    table: Vec<(u8, u8)>,
+    linear: Vec<[f32; 3]>,
 }
 
 impl PaletteLut {
     pub fn new(palette: &[Rgb]) -> Self {
         assert!(!palette.is_empty() && palette.len() <= 256);
-        let mut table = vec![0u8; 32 * 32 * 32];
+        let labs: Vec<[f32; 3]> = palette.iter().map(|&p| oklab(p)).collect();
+        let mut table = vec![(0u8, 0u8); 32 * 32 * 32];
         for r in 0..32u32 {
             for g in 0..32u32 {
                 for b in 0..32u32 {
                     let c = [(r << 3 | 4) as u8, (g << 3 | 4) as u8, (b << 3 | 4) as u8];
-                    table[((r << 10) | (g << 5) | b) as usize] = nearest_index(c, palette) as u8;
+                    let (i, j) = nearest_two(&oklab(c), &labs);
+                    table[((r << 10) | (g << 5) | b) as usize] = (i as u8, j as u8);
                 }
             }
         }
-        Self { table }
+        Self {
+            table,
+            linear: palette.iter().map(|&p| to_linear(p)).collect(),
+        }
+    }
+
+    #[inline]
+    fn cell(c: Rgb) -> usize {
+        ((c[0] as usize >> 3) << 10) | ((c[1] as usize >> 3) << 5) | (c[2] as usize >> 3)
     }
 
     #[inline]
     pub fn lookup(&self, c: Rgb) -> u8 {
-        let i = ((c[0] as usize >> 3) << 10) | ((c[1] as usize >> 3) << 5) | (c[2] as usize >> 3);
-        self.table[i]
+        self.table[Self::cell(c)].0
+    }
+
+    /// Palette-aware ordered dithering ("two nearest"): `c` is projected onto the line
+    /// between its two nearest palette colours (in linear light, where on-screen mixing
+    /// happens), and the threshold `t` (0..1, from a dither matrix) picks between them.
+    /// `strength` 0 = plain nearest colour, 1 = full mixing.
+    #[inline]
+    pub fn lookup_mixed(&self, c: Rgb, t: f32, strength: f32) -> u8 {
+        let (i, j) = self.table[Self::cell(c)];
+        if i == j || strength <= 0.0 {
+            return i;
+        }
+        let (p, q, x) = (
+            self.linear[i as usize],
+            self.linear[j as usize],
+            to_linear(c),
+        );
+        let d = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
+        let len2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+        if len2 <= 1e-12 {
+            return i;
+        }
+        let mix = (((x[0] - p[0]) * d[0] + (x[1] - p[1]) * d[1] + (x[2] - p[2]) * d[2]) / len2)
+            .clamp(0.0, 1.0);
+        if mix > 0.5 + (t - 0.5) * strength.min(1.0) {
+            j
+        } else {
+            i
+        }
     }
 }
 
@@ -90,16 +210,13 @@ pub fn kmeans_palette(pixels: &[Rgb], k: usize, iterations: usize) -> Vec<Rgb> {
     // Subsample large inputs for speed.
     let mut rng = Lcg(0x5eed_1994);
     let max_samples = 30_000;
+    // Clustered in Oklab, so colours are spent where the eye sees differences.
     let samples: Vec<[f32; 3]> = if pixels.len() > max_samples {
         (0..max_samples)
-            .map(|_| pixels[rng.below(pixels.len())])
-            .map(|c| [c[0] as f32, c[1] as f32, c[2] as f32])
+            .map(|_| oklab(pixels[rng.below(pixels.len())]))
             .collect()
     } else {
-        pixels
-            .iter()
-            .map(|c| [c[0] as f32, c[1] as f32, c[2] as f32])
-            .collect()
+        pixels.iter().map(|&c| oklab(c)).collect()
     };
 
     // Few unique colours? Return them directly.
@@ -110,10 +227,7 @@ pub fn kmeans_palette(pixels: &[Rgb], k: usize, iterations: usize) -> Vec<Rgb> {
         return uniq;
     }
 
-    let d2 = |a: &[f32; 3], b: &[f32; 3]| {
-        let (x, y, z) = (a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-        2.0 * x * x + 4.0 * y * y + 3.0 * z * z
-    };
+    let d2 = lab_dist;
 
     // k-means++ seeding.
     let mut centers: Vec<[f32; 3]> = vec![samples[rng.below(samples.len())]];
@@ -175,16 +289,7 @@ pub fn kmeans_palette(pixels: &[Rgb], k: usize, iterations: usize) -> Vec<Rgb> {
         }
     }
 
-    centers
-        .iter()
-        .map(|c| {
-            [
-                c[0].round().clamp(0.0, 255.0) as u8,
-                c[1].round().clamp(0.0, 255.0) as u8,
-                c[2].round().clamp(0.0, 255.0) as u8,
-            ]
-        })
-        .collect()
+    dedup_keep_order(&centers.iter().map(|&c| from_oklab(c)).collect::<Vec<_>>())
 }
 
 /// Pick the `n` entries of `source` that best represent `pixels`:
@@ -198,7 +303,7 @@ pub fn best_n_from(pixels: &[Rgb], source: &[Rgb], n: usize) -> Vec<Rgb> {
     let mut out = Vec::with_capacity(n);
     for c in centers {
         let mut best = None;
-        let mut bd = i32::MAX;
+        let mut bd = f32::MAX;
         for (i, &p) in source.iter().enumerate() {
             if used[i] {
                 continue;

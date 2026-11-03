@@ -84,7 +84,7 @@ impl EnginePreset {
     pub fn import_notes(self) -> &'static str {
         match self {
             Self::Godot => {
-                "Godot 4: copy the folder into your project. Open the .tscn: every mesh already uses psx_lit.gdshader (vertex snapping, affine UVs, dither, nearest filtering). Tweak 'snap_resolution' on the material for more or less jitter."
+                "Godot 4: copy the folder into your project. Open the .tscn: every mesh already uses a psx_*.gdshader material (vertex snapping, affine UVs, dither, 15-bit colour, nearest filtering): psx_opaque, psx_cutout (alpha-tested) or psx_blend (translucent), with _double variants for double-sided materials. Shared code is in psx_common.gdshaderinc. Tweak 'snap_lines' on a material for more or less jitter. Keep the Environment tonemap on Linear for colours that match the psx-forge preview.\n\nScreen pass (optional, recommended): add a Control with psx_screen.gd as your main scene's root UI node and put the 3D level (with its camera) under it. It renders at 240 lines, upscales with nearest filtering and does the PS1 dither + 15-bit once per virtual pixel (psx_post.gdshader), switching those off in the materials.\n\nThe .png.import files tell Godot to keep textures lossless and without VRAM compression, so the palette survives; HD textures (over 512 px) get mipmaps."
             }
             Self::Unity => {
                 "Unity: drop the .fbx (or .obj) and .png into Assets. For rigged models set Rig > Animation Type = Humanoid (or Generic) and apply. Select the PNG: Filter Mode = Point, Compression = None, Generate Mip Maps = off. Use an Unlit/Texture (or URP Unlit) material; vertex colours need a vertex-colour shader."
@@ -235,9 +235,29 @@ pub fn export_model(model: &Model, dir: &Path, s: &ExportSettings) -> Result<Vec
         }
     }
     if s.godot_scene {
-        let sh = dir.join("psx_lit.gdshader");
-        std::fs::write(&sh, godot_shader_for(model))?;
-        written.push(sh);
+        let common = dir.join("psx_common.gdshaderinc");
+        std::fs::write(&common, godot_common_for(model))?;
+        written.push(common);
+        for v in godot_variants(model) {
+            let p = dir.join(v.file_name());
+            std::fs::write(&p, v.source())?;
+            written.push(p);
+        }
+        for (name, text) in [
+            ("psx_screen.gd", GODOT_SCREEN_SCRIPT),
+            ("psx_post.gdshader", GODOT_POST_SHADER),
+        ] {
+            let p = dir.join(name);
+            std::fs::write(&p, text)?;
+            written.push(p);
+        }
+        for (i, m) in model.materials.iter().enumerate() {
+            if let (Some(img), Some(name)) = (&m.albedo, texture_file(model, i)) {
+                let p = dir.join(format!("{name}.import"));
+                std::fs::write(&p, godot_texture_import(is_hd(img)))?;
+                written.push(p);
+            }
+        }
         let p = dir.join(format!("{base}.tscn"));
         std::fs::write(&p, godot_scene(model))?;
         written.push(p);
@@ -429,7 +449,7 @@ pub fn glb_bytes(model: &Model, unlit: bool) -> Result<Vec<u8>> {
     for m in &model.materials {
         let mut pbr =
             json!({"baseColorFactor": m.base_color, "metallicFactor": 0.0, "roughnessFactor": 1.0});
-        let mut mat = json!({"name": m.name, "doubleSided": false});
+        let mut mat = json!({"name": m.name, "doubleSided": m.double_sided});
         if let Some(img) = &m.albedo {
             let mut png = Vec::new();
             img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)?;
@@ -648,20 +668,25 @@ pub fn godot_scene(model: &Model) -> String {
         .map(|i| texture_file(model, i))
         .collect();
     let n_tex = tex_files.iter().flatten().count();
+    let variants = godot_variants(model);
     let mut s = format!(
         "[gd_scene load_steps={} format=3]\n\n",
-        3 + n_tex + model.materials.len().max(1) + model.is_rigged() as usize
+        2 + variants.len() + n_tex + model.materials.len().max(1) + model.is_rigged() as usize
     );
     writeln!(
         s,
         "[ext_resource type=\"PackedScene\" path=\"{base}.glb\" id=\"1_glb\"]"
     )
     .ok();
-    writeln!(
-        s,
-        "[ext_resource type=\"Shader\" path=\"psx_lit.gdshader\" id=\"2_shader\"]"
-    )
-    .ok();
+    for v in &variants {
+        writeln!(
+            s,
+            "[ext_resource type=\"Shader\" path=\"{}\" id=\"{}\"]",
+            v.file_name(),
+            v.resource_id()
+        )
+        .ok();
+    }
     if model.is_rigged() {
         writeln!(
             s,
@@ -688,11 +713,21 @@ pub fn godot_scene(model: &Model) -> String {
             .materials
             .get(i)
             .map_or("material".to_string(), |m| m.name.replace('"', "'"));
-        writeln!(s, "[sub_resource type=\"ShaderMaterial\" id=\"mat_{i}\"]\nresource_name = \"{mat_name}\"\nrender_priority = 0\nshader = ExtResource(\"2_shader\")").ok();
+        let shader = model
+            .materials
+            .get(i)
+            .map_or(GodotVariant::default(), GodotVariant::for_material)
+            .resource_id();
+        writeln!(s, "[sub_resource type=\"ShaderMaterial\" id=\"mat_{i}\"]\nresource_name = \"{mat_name}\"\nrender_priority = 0\nshader = ExtResource(\"{shader}\")").ok();
         match tex_files.get(i).cloned().flatten() {
             Some(_) => writeln!(s, "shader_parameter/albedo_texture = ExtResource(\"tex_{i}\")\nshader_parameter/use_texture = true").ok(),
             None => writeln!(s, "shader_parameter/use_texture = false").ok(),
         };
+        // Colour is baked into the texture / vertex colours; translucency isn't.
+        let alpha = model.materials.get(i).map_or(1.0, |m| m.base_color[3]);
+        if alpha < 0.999 {
+            writeln!(s, "shader_parameter/tint = Color(1, 1, 1, {alpha})").ok();
+        }
         s.push('\n');
     }
     if model.is_rigged() {
@@ -794,7 +829,10 @@ pub fn preview_image_shaded(
                 .and_then(|m| model.materials.get(m))
                 .and_then(|m| m.albedo.as_ref()),
             id_base: 0,
-            double_sided: false,
+            double_sided: p
+                .material
+                .and_then(|m| model.materials.get(m))
+                .is_some_and(|m| m.double_sided),
             normals: nrm,
             pbr: p
                 .material
@@ -821,21 +859,160 @@ pub fn preview_image_shaded(
 pub const GODOT_APPLY_SCRIPT_NAME: &str = "psx_apply_materials.gd";
 pub const GODOT_APPLY_SCRIPT: &str = include_str!("../godot/psx_apply_materials.gd");
 
-pub const GODOT_PSX_SHADER: &str = include_str!("../godot/psx_lit.gdshader");
+pub const GODOT_COMMON_SHADER: &str = include_str!("../godot/psx_common.gdshaderinc");
+pub const GODOT_SCREEN_SCRIPT: &str = include_str!("../godot/psx_screen.gd");
+pub const GODOT_POST_SHADER: &str = include_str!("../godot/psx_post.gdshader");
+
+/// How a material's alpha is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AlphaKind {
+    #[default]
+    Opaque,
+    /// Texels are fully opaque or fully transparent: alpha test, stays in the opaque pass.
+    Cutout,
+    /// Partial alpha (texture or base colour): alpha blending.
+    Blend,
+}
+
+impl AlphaKind {
+    pub fn of(m: &crate::mesh::Material) -> Self {
+        if m.base_color[3] < 0.999 {
+            return Self::Blend;
+        }
+        let Some(img) = &m.albedo else {
+            return Self::Opaque;
+        };
+        let (mut clear, mut partial) = (false, false);
+        for p in img.pixels() {
+            match p.0[3] {
+                0 => clear = true,
+                255 => {}
+                _ => partial = true,
+            }
+        }
+        if partial {
+            Self::Blend
+        } else if clear {
+            Self::Cutout
+        } else {
+            Self::Opaque
+        }
+    }
+}
+
+/// One `psx_*.gdshader` variant: alpha handling x culling.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GodotVariant {
+    pub alpha: AlphaKind,
+    pub double_sided: bool,
+}
+
+impl GodotVariant {
+    pub fn for_material(m: &crate::mesh::Material) -> Self {
+        Self {
+            alpha: AlphaKind::of(m),
+            double_sided: m.double_sided,
+        }
+    }
+
+    fn stem(self) -> String {
+        let a = match self.alpha {
+            AlphaKind::Opaque => "opaque",
+            AlphaKind::Cutout => "cutout",
+            AlphaKind::Blend => "blend",
+        };
+        format!("psx_{a}{}", if self.double_sided { "_double" } else { "" })
+    }
+
+    pub fn file_name(self) -> String {
+        format!("{}.gdshader", self.stem())
+    }
+
+    fn resource_id(self) -> String {
+        format!("sh_{}", self.stem())
+    }
+
+    pub fn source(self) -> String {
+        let (what, define, blend) = match self.alpha {
+            AlphaKind::Opaque => ("opaque", "", ""),
+            AlphaKind::Cutout => ("alpha-tested cutout", "#define PSX_CUTOUT\n", ""),
+            AlphaKind::Blend => ("alpha-blended", "#define PSX_BLEND\n", ", blend_mix"),
+        };
+        let (sides, cull) = if self.double_sided {
+            ("both faces drawn", "cull_disabled")
+        } else {
+            ("back faces culled", "cull_back")
+        };
+        format!(
+            "// psx-forge PSX material: {what}, {sides}. The code lives in psx_common.gdshaderinc.\n\
+             shader_type spatial;\n\
+             render_mode unshaded, {cull}, depth_draw_opaque{blend};\n\
+             {define}#include \"psx_common.gdshaderinc\"\n"
+        )
+    }
+}
+
+/// The shader variants a model's materials need (at least one).
+pub fn godot_variants(model: &Model) -> Vec<GodotVariant> {
+    let mut v: Vec<GodotVariant> = model
+        .materials
+        .iter()
+        .map(GodotVariant::for_material)
+        .collect();
+    if v.is_empty() {
+        v.push(GodotVariant::default());
+    }
+    v.sort();
+    v.dedup();
+    v
+}
+
+fn is_hd(img: &image::RgbaImage) -> bool {
+    img.width().max(img.height()) > 512
+}
 
 /// HD textures (over 512 px) sample with nearest *mipmapped* filtering: texels stay sharp
 /// up close without shimmering at a distance. PS1-sized textures keep plain nearest.
-fn godot_shader_for(model: &Model) -> String {
+fn godot_common_for(model: &Model) -> String {
     let hd = model
         .materials
         .iter()
         .filter_map(|m| m.albedo.as_ref())
-        .any(|i| i.width().max(i.height()) > 512);
+        .any(is_hd);
     if hd {
-        GODOT_PSX_SHADER.replacen("filter_nearest,", "filter_nearest_mipmap,", 1)
+        GODOT_COMMON_SHADER.replacen("filter_nearest,", "filter_nearest_mipmap,", 1)
     } else {
-        GODOT_PSX_SHADER.to_string()
+        GODOT_COMMON_SHADER.to_string()
     }
+}
+
+/// Godot 4 texture import settings: lossless, no VRAM compression (Godot's "Detect 3D"
+/// would otherwise switch to it and smear the palette), exact transparent texels.
+/// Mipmaps only for HD textures, whose shader samples them.
+pub fn godot_texture_import(mipmaps: bool) -> String {
+    format!(
+        "[remap]\n\n\
+         importer=\"texture\"\n\
+         type=\"CompressedTexture2D\"\n\n\
+         [params]\n\n\
+         compress/mode=0\n\
+         compress/high_quality=false\n\
+         compress/lossy_quality=0.7\n\
+         compress/hdr_compression=1\n\
+         compress/normal_map=0\n\
+         compress/channel_pack=0\n\
+         mipmaps/generate={mipmaps}\n\
+         mipmaps/limit=-1\n\
+         roughness/mode=0\n\
+         roughness/src_normal=\"\"\n\
+         process/fix_alpha_border=false\n\
+         process/premult_alpha=false\n\
+         process/normal_map_invert_y=false\n\
+         process/hdr_as_srgb=false\n\
+         process/hdr_clamp_exposure=false\n\
+         process/size_limit=0\n\
+         detect_3d/compress_to=0\n"
+    )
 }
 
 #[cfg(test)]
@@ -1061,6 +1238,30 @@ mod tests {
     }
 
     #[test]
+    fn godot_variant_follows_alpha_and_sides() {
+        let mut m = Material::default();
+        assert_eq!(
+            GodotVariant::for_material(&m).file_name(),
+            "psx_opaque.gdshader"
+        );
+        let mut img = image::RgbaImage::from_pixel(4, 4, image::Rgba([9, 9, 9, 255]));
+        img.put_pixel(0, 0, image::Rgba([0, 0, 0, 0]));
+        m.albedo = Some(img.clone());
+        assert_eq!(AlphaKind::of(&m), AlphaKind::Cutout);
+        img.put_pixel(1, 0, image::Rgba([9, 9, 9, 128]));
+        m.albedo = Some(img);
+        m.double_sided = true;
+        let v = GodotVariant::for_material(&m);
+        assert_eq!(v.file_name(), "psx_blend_double.gdshader");
+        let src = v.source();
+        assert!(src.contains("cull_disabled") && src.contains("blend_mix"));
+        assert!(
+            src.contains("#define PSX_BLEND")
+                && src.contains("#include \"psx_common.gdshaderinc\"")
+        );
+    }
+
+    #[test]
     fn export_writes_godot_bundle_and_obj_reimports() {
         let m = model();
         let dir = std::env::temp_dir().join("psxforge_export_test");
@@ -1077,6 +1278,11 @@ mod tests {
         );
         let scene = std::fs::read_to_string(dir.join("ball_test.tscn")).unwrap();
         assert!(scene.contains("material_override"));
+        assert!(scene.contains("path=\"psx_opaque.gdshader\""));
+        assert!(dir.join("psx_common.gdshaderinc").is_file());
+        assert!(dir.join("psx_screen.gd").is_file());
+        let import = std::fs::read_to_string(dir.join("ball_test.png.import")).unwrap();
+        assert!(import.contains("compress/mode=0") && import.contains("mipmaps/generate=false"));
         let back = Model::load(&dir.join("ball_test.obj")).unwrap();
         assert_eq!(back.tri_count(), m.tri_count());
         assert!(back.materials[0].albedo.is_some());
