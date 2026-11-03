@@ -1,0 +1,440 @@
+//! Palette import/export, k-means palette generation and fast nearest-colour lookup.
+
+use anyhow::{Context, Result, bail};
+use std::path::Path;
+
+pub type Rgb = [u8; 3];
+
+/// Snap an 8-bit colour to the PS1's 15-bit RGB555 space (5 bits per channel),
+/// expanded back to 8 bits with bit replication so white stays 255.
+pub fn snap_rgb555(c: Rgb) -> Rgb {
+    let s = |v: u8| {
+        let five = v >> 3;
+        (five << 3) | (five >> 2)
+    };
+    [s(c[0]), s(c[1]), s(c[2])]
+}
+
+/// Perceptually weighted squared RGB distance ("redmean").
+#[inline]
+pub fn color_dist(a: Rgb, b: Rgb) -> i32 {
+    let rmean = (a[0] as i32 + b[0] as i32) / 2;
+    let dr = a[0] as i32 - b[0] as i32;
+    let dg = a[1] as i32 - b[1] as i32;
+    let db = a[2] as i32 - b[2] as i32;
+    (((512 + rmean) * dr * dr) >> 8) + 4 * dg * dg + (((767 - rmean) * db * db) >> 8)
+}
+
+pub fn nearest_index(c: Rgb, palette: &[Rgb]) -> usize {
+    let mut best = 0;
+    let mut best_d = i32::MAX;
+    for (i, &p) in palette.iter().enumerate() {
+        let d = color_dist(c, p);
+        if d < best_d {
+            best_d = d;
+            best = i;
+        }
+    }
+    best
+}
+
+/// 32x32x32 lookup table mapping RGB555 cells to palette indices.
+/// Makes per-pixel palette mapping O(1) instead of O(palette).
+pub struct PaletteLut {
+    table: Vec<u8>,
+}
+
+impl PaletteLut {
+    pub fn new(palette: &[Rgb]) -> Self {
+        assert!(!palette.is_empty() && palette.len() <= 256);
+        let mut table = vec![0u8; 32 * 32 * 32];
+        for r in 0..32u32 {
+            for g in 0..32u32 {
+                for b in 0..32u32 {
+                    let c = [(r << 3 | 4) as u8, (g << 3 | 4) as u8, (b << 3 | 4) as u8];
+                    table[((r << 10) | (g << 5) | b) as usize] = nearest_index(c, palette) as u8;
+                }
+            }
+        }
+        Self { table }
+    }
+
+    #[inline]
+    pub fn lookup(&self, c: Rgb) -> u8 {
+        let i = ((c[0] as usize >> 3) << 10) | ((c[1] as usize >> 3) << 5) | (c[2] as usize >> 3);
+        self.table[i]
+    }
+}
+
+/// Tiny deterministic PRNG so results are reproducible between runs.
+struct Lcg(u64);
+impl Lcg {
+    fn next(&mut self) -> u64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        self.0 >> 33
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n.max(1) as u64) as usize
+    }
+}
+
+/// k-means++ palette of at most `k` colours from `pixels`.
+pub fn kmeans_palette(pixels: &[Rgb], k: usize, iterations: usize) -> Vec<Rgb> {
+    let k = k.clamp(1, 256);
+    if pixels.is_empty() {
+        return vec![[0, 0, 0]];
+    }
+    // Subsample large inputs for speed.
+    let mut rng = Lcg(0x5eed_1994);
+    let max_samples = 30_000;
+    let samples: Vec<[f32; 3]> = if pixels.len() > max_samples {
+        (0..max_samples)
+            .map(|_| pixels[rng.below(pixels.len())])
+            .map(|c| [c[0] as f32, c[1] as f32, c[2] as f32])
+            .collect()
+    } else {
+        pixels
+            .iter()
+            .map(|c| [c[0] as f32, c[1] as f32, c[2] as f32])
+            .collect()
+    };
+
+    // Few unique colours? Return them directly.
+    let mut uniq: Vec<Rgb> = pixels.to_vec();
+    uniq.sort_unstable();
+    uniq.dedup();
+    if uniq.len() <= k {
+        return uniq;
+    }
+
+    let d2 = |a: &[f32; 3], b: &[f32; 3]| {
+        let (x, y, z) = (a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+        2.0 * x * x + 4.0 * y * y + 3.0 * z * z
+    };
+
+    // k-means++ seeding.
+    let mut centers: Vec<[f32; 3]> = vec![samples[rng.below(samples.len())]];
+    let mut dist: Vec<f32> = samples.iter().map(|s| d2(s, &centers[0])).collect();
+    while centers.len() < k {
+        let total: f64 = dist.iter().map(|&d| d as f64).sum();
+        if total <= 0.0 {
+            break;
+        }
+        let mut target = (rng.next() as f64 / (1u64 << 31) as f64) * total;
+        let mut chosen = samples.len() - 1;
+        for (i, &d) in dist.iter().enumerate() {
+            target -= d as f64;
+            if target <= 0.0 {
+                chosen = i;
+                break;
+            }
+        }
+        let c = samples[chosen];
+        centers.push(c);
+        for (i, s) in samples.iter().enumerate() {
+            dist[i] = dist[i].min(d2(s, &c));
+        }
+    }
+
+    let mut assign = vec![0usize; samples.len()];
+    for _ in 0..iterations {
+        for (i, s) in samples.iter().enumerate() {
+            let mut best = 0;
+            let mut bd = f32::MAX;
+            for (j, c) in centers.iter().enumerate() {
+                let d = d2(s, c);
+                if d < bd {
+                    bd = d;
+                    best = j;
+                }
+            }
+            assign[i] = best;
+        }
+        let mut sums = vec![[0f64; 4]; centers.len()];
+        for (i, s) in samples.iter().enumerate() {
+            let a = &mut sums[assign[i]];
+            a[0] += s[0] as f64;
+            a[1] += s[1] as f64;
+            a[2] += s[2] as f64;
+            a[3] += 1.0;
+        }
+        for (j, c) in centers.iter_mut().enumerate() {
+            let a = sums[j];
+            if a[3] > 0.0 {
+                *c = [
+                    (a[0] / a[3]) as f32,
+                    (a[1] / a[3]) as f32,
+                    (a[2] / a[3]) as f32,
+                ];
+            } else {
+                *c = samples[rng.below(samples.len())];
+            }
+        }
+    }
+
+    centers
+        .iter()
+        .map(|c| {
+            [
+                c[0].round().clamp(0.0, 255.0) as u8,
+                c[1].round().clamp(0.0, 255.0) as u8,
+                c[2].round().clamp(0.0, 255.0) as u8,
+            ]
+        })
+        .collect()
+}
+
+/// Pick the `n` entries of `source` that best represent `pixels`:
+/// cluster the image, then map each centroid to its nearest unused source colour.
+pub fn best_n_from(pixels: &[Rgb], source: &[Rgb], n: usize) -> Vec<Rgb> {
+    if source.len() <= n {
+        return source.to_vec();
+    }
+    let centers = kmeans_palette(pixels, n, 10);
+    let mut used = vec![false; source.len()];
+    let mut out = Vec::with_capacity(n);
+    for c in centers {
+        let mut best = None;
+        let mut bd = i32::MAX;
+        for (i, &p) in source.iter().enumerate() {
+            if used[i] {
+                continue;
+            }
+            let d = color_dist(c, p);
+            if d < bd {
+                bd = d;
+                best = Some(i);
+            }
+        }
+        if let Some(i) = best {
+            used[i] = true;
+            out.push(source[i]);
+        }
+    }
+    out
+}
+
+pub fn dedup_keep_order(p: &[Rgb]) -> Vec<Rgb> {
+    let mut out: Vec<Rgb> = Vec::with_capacity(p.len());
+    for &c in p {
+        if !out.contains(&c) {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------- import / export
+
+fn parse_hex6(s: &str) -> Option<Rgb> {
+    let s = s.trim().trim_start_matches('#');
+    let s = if s.len() == 8 { &s[2..] } else { s }; // AARRGGBB (paint.net)
+    if s.len() != 6 {
+        return None;
+    }
+    let v = u32::from_str_radix(s, 16).ok()?;
+    Some([(v >> 16) as u8, (v >> 8) as u8, v as u8])
+}
+
+/// Load a palette from .gpl, .pal (JASC or RIFF), .act, .hex, paint.net .txt, or a swatch image.
+pub fn load_palette(path: &Path) -> Result<Vec<Rgb>> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let colors = match ext.as_str() {
+        "png" | "bmp" | "gif" | "jpg" | "jpeg" | "tga" => {
+            let img = image::open(path)
+                .context("opening swatch image")?
+                .to_rgba8();
+            let mut out = Vec::new();
+            for p in img.pixels() {
+                if p.0[3] < 128 {
+                    continue;
+                }
+                let c = [p.0[0], p.0[1], p.0[2]];
+                if !out.contains(&c) {
+                    out.push(c);
+                    if out.len() > 256 {
+                        bail!("swatch image has more than 256 colours");
+                    }
+                }
+            }
+            out
+        }
+        "act" => {
+            let bytes = std::fs::read(path)?;
+            if bytes.len() < 768 {
+                bail!("ACT file too short");
+            }
+            let count = if bytes.len() >= 772 {
+                (u16::from_be_bytes([bytes[768], bytes[769]]) as usize).clamp(1, 256)
+            } else {
+                256
+            };
+            (0..count)
+                .map(|i| [bytes[i * 3], bytes[i * 3 + 1], bytes[i * 3 + 2]])
+                .collect()
+        }
+        "pal" => {
+            let bytes = std::fs::read(path)?;
+            if bytes.starts_with(b"RIFF") {
+                // RIFF PAL: "RIFF" size "PAL " "data" size ver(2) count(2) entries(rgbx)
+                let pos = bytes
+                    .windows(4)
+                    .position(|w| w == b"data")
+                    .context("RIFF PAL without data chunk")?;
+                let count = u16::from_le_bytes([bytes[pos + 10], bytes[pos + 11]]) as usize;
+                let base = pos + 12;
+                (0..count.min(256))
+                    .filter(|i| base + i * 4 + 2 < bytes.len())
+                    .map(|i| {
+                        [
+                            bytes[base + i * 4],
+                            bytes[base + i * 4 + 1],
+                            bytes[base + i * 4 + 2],
+                        ]
+                    })
+                    .collect()
+            } else {
+                let text = String::from_utf8_lossy(&bytes);
+                let mut lines = text.lines();
+                let header = lines.next().unwrap_or("");
+                if !header.trim().eq_ignore_ascii_case("JASC-PAL") {
+                    bail!("unknown .pal format");
+                }
+                lines.next();
+                lines.next();
+                lines.filter_map(parse_rgb_triplet).collect()
+            }
+        }
+        "gpl" => {
+            let text = std::fs::read_to_string(path)?;
+            text.lines()
+                .filter(|l| {
+                    let t = l.trim();
+                    !t.is_empty()
+                        && !t.starts_with('#')
+                        && !t.starts_with("GIMP")
+                        && !t.starts_with("Name:")
+                        && !t.starts_with("Columns:")
+                })
+                .filter_map(parse_rgb_triplet)
+                .collect()
+        }
+        _ => {
+            // .hex, paint.net .txt and anything else: one hex colour per line, ';' comments.
+            let text = std::fs::read_to_string(path)?;
+            text.lines()
+                .filter(|l| !l.trim_start().starts_with(';'))
+                .filter_map(parse_hex6)
+                .collect()
+        }
+    };
+    let colors = dedup_keep_order(&colors);
+    if colors.is_empty() {
+        bail!("palette {} contains no colours", path.display());
+    }
+    if colors.len() > 256 {
+        bail!("palette has {} colours; the maximum is 256", colors.len());
+    }
+    Ok(colors)
+}
+
+fn parse_rgb_triplet(line: &str) -> Option<Rgb> {
+    let mut it = line.split_whitespace().map(|t| t.parse::<u16>());
+    let r = it.next()?.ok()?;
+    let g = it.next()?.ok()?;
+    let b = it.next()?.ok()?;
+    Some([r.min(255) as u8, g.min(255) as u8, b.min(255) as u8])
+}
+
+pub fn save_palette(path: &Path, palette: &[Rgb]) -> Result<()> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let text = match ext.as_str() {
+        "gpl" => {
+            let mut s = String::from("GIMP Palette\nName: psx-forge\nColumns: 8\n#\n");
+            for c in palette {
+                s.push_str(&format!("{:3} {:3} {:3}\tUntitled\n", c[0], c[1], c[2]));
+            }
+            s
+        }
+        "pal" => {
+            let mut s = format!("JASC-PAL\n0100\n{}\n", palette.len());
+            for c in palette {
+                s.push_str(&format!("{} {} {}\n", c[0], c[1], c[2]));
+            }
+            s
+        }
+        _ => palette
+            .iter()
+            .map(|c| format!("{:02x}{:02x}{:02x}\n", c[0], c[1], c[2]))
+            .collect(),
+    };
+    std::fs::write(path, text)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rgb555_keeps_extremes() {
+        assert_eq!(snap_rgb555([255, 255, 255]), [255, 255, 255]);
+        assert_eq!(snap_rgb555([0, 0, 0]), [0, 0, 0]);
+        assert_eq!(snap_rgb555([9, 9, 9]), [8, 8, 8]);
+    }
+
+    #[test]
+    fn kmeans_returns_unique_when_few_colours() {
+        let px = vec![[255, 0, 0], [0, 255, 0], [255, 0, 0]];
+        let p = kmeans_palette(&px, 16, 5);
+        assert_eq!(p.len(), 2);
+    }
+
+    #[test]
+    fn kmeans_limits_colour_count() {
+        let px: Vec<Rgb> = (0..4096)
+            .map(|i| [(i % 256) as u8, (i / 16) as u8, 77])
+            .collect();
+        let p = kmeans_palette(&px, 8, 8);
+        assert!(p.len() <= 8 && p.len() >= 4);
+    }
+
+    #[test]
+    fn hex_parsing_handles_paintnet_and_hash() {
+        assert_eq!(parse_hex6("#ff8000"), Some([255, 128, 0]));
+        assert_eq!(parse_hex6("FFff8000"), Some([255, 128, 0]));
+        assert_eq!(parse_hex6("nope"), None);
+    }
+
+    #[test]
+    fn lut_matches_bruteforce_on_palette_entries() {
+        let pal = vec![[0, 0, 0], [255, 255, 255], [200, 30, 30], [30, 200, 30]];
+        let lut = PaletteLut::new(&pal);
+        for (i, &c) in pal.iter().enumerate() {
+            assert_eq!(lut.lookup(c) as usize, i);
+        }
+    }
+
+    #[test]
+    fn palette_roundtrip_gpl_and_hex() {
+        let dir = std::env::temp_dir();
+        let pal = vec![[1, 2, 3], [250, 128, 64]];
+        for ext in ["gpl", "hex", "pal"] {
+            let p = dir.join(format!("psxforge_test_pal.{ext}"));
+            save_palette(&p, &pal).unwrap();
+            assert_eq!(load_palette(&p).unwrap(), pal, "{ext}");
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}

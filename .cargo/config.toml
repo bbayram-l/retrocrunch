@@ -1,0 +1,5 @@
+# The global environment sets CC to MSYS2 gcc; the MSVC toolchain needs cl.exe for
+# meshoptimizer's C++ sources. Empty target-specific overrides make cc-rs auto-detect MSVC.
+[env]
+CC_x86_64_pc_windows_msvc = { value = "", force = true }
+CXX_x86_64_pc_windows_msvc = { value = "", force = true }
