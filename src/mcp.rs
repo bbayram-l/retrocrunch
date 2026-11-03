@@ -286,9 +286,9 @@ pub fn check_paths(args: &Value, root: &Path) -> Result<()> {
             _ => {}
         }
     }
-    // `preset` is a name unless it's a .json file, which must then be inside the root too.
+    // `preset` is a name unless it looks like a file path, which must be inside the root.
     if let Some(Value::String(s)) = args.get("preset")
-        && s.to_ascii_lowercase().ends_with(".json")
+        && crate::presets::is_path_like(s)
     {
         values.push(s);
     }
@@ -446,6 +446,13 @@ mod tests {
             .is_err(),
             "preset files outside the workspace are rejected"
         );
+        for sneaky in ["evil.JSON", "evil.json/.", "../evil", "sub\\evil"] {
+            let p = std::env::temp_dir().join(sneaky);
+            assert!(
+                check_paths(&json!({"preset": p.display().to_string()}), &root).is_err(),
+                "{sneaky}"
+            );
+        }
         assert!(check_paths(&json!({"preset": "Hero character"}), &root).is_ok());
         let sneaky = root.join("assets").join("..").join("..").join("x.glb");
         assert!(check_paths(&json!({"output_dir": sneaky.display().to_string()}), &root).is_err());

@@ -449,9 +449,19 @@ pub fn delete_user(p: &Preset) -> Result<()> {
 }
 
 /// A preset by file path, user preset name, or built-in name (case-insensitive).
+/// Whether `find` treats `name_or_path` as a file path (anything that looks like a path
+/// or has a .json extension). MCP uses the same test to sandbox it.
+pub fn is_path_like(name_or_path: &str) -> bool {
+    let p = Path::new(name_or_path);
+    p.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+        || name_or_path.contains(['/', '\\'])
+        || p.is_absolute()
+}
+
 pub fn find(name_or_path: &str) -> Result<Preset> {
     let p = Path::new(name_or_path);
-    if p.extension().is_some_and(|e| e == "json") && p.is_file() {
+    if is_path_like(name_or_path) {
         return read(p);
     }
     let (user, _) = load_user();
