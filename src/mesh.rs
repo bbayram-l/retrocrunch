@@ -459,16 +459,23 @@ fn check_gltf_uris(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Byte-wise %XX decoding. Never slices the `str`, so multi-byte UTF-8 after a `%`
+/// (e.g. `"%é"` in a crafted URI) can't hit a char boundary and panic.
 fn percent_decode(s: &str) -> String {
+    fn hex(c: u8) -> Option<u8> {
+        (c as char).to_digit(16).map(|d| d as u8)
+    }
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'%'
-            && i + 2 < b.len()
-            && let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16)
+            && let (Some(hi), Some(lo)) = (
+                b.get(i + 1).copied().and_then(hex),
+                b.get(i + 2).copied().and_then(hex),
+            )
         {
-            out.push(v);
+            out.push(hi << 4 | lo);
             i += 3;
             continue;
         }
@@ -1280,6 +1287,30 @@ pub(crate) mod tests {
                 .to_string()
                 .contains("outside its folder")
         );
+    }
+
+    #[test]
+    fn percent_decode_handles_crafted_input_without_panicking() {
+        assert_eq!(percent_decode("..%2F..%2Fb.bin"), "../../b.bin");
+        assert_eq!(percent_decode("a%2fb"), "a/b");
+        // Multi-byte UTF-8 right after '%' used to panic on a char-boundary slice.
+        assert_eq!(percent_decode("%é"), "%é");
+        assert_eq!(percent_decode("%aé"), "%aé"); // old slice [1..3] split 'é' here
+        assert_eq!(percent_decode("x%a"), "x%a");
+        assert_eq!(percent_decode("x%e9%"), "x\u{FFFD}%");
+        assert_eq!(percent_decode("%"), "%");
+        assert_eq!(percent_decode("%4"), "%4");
+        assert_eq!(percent_decode("%zz"), "%zz");
+        // And the loader rejects such a URI instead of crashing.
+        let dir = std::env::temp_dir().join("psxforge_gltf_utf8");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("utf8.gltf");
+        std::fs::write(
+            &p,
+            r#"{"asset":{"version":"2.0"},"buffers":[{"uri":"%aé/../../b.bin","byteLength":4}]}"#,
+        )
+        .unwrap();
+        assert!(Model::load(&p).is_err());
     }
 
     #[test]
