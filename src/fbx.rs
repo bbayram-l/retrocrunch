@@ -81,6 +81,25 @@ fn convert_material(m: &ufbx::Material, dir: &Path) -> Material {
             .and_then(|t| load_texture(t, dir)),
         emissive: map_texture(&[&m.pbr.emission_color, &m.fbx.emission_color])
             .and_then(|t| load_texture(t, dir)),
+        metallic: if m.pbr.metalness.has_value {
+            m.pbr.metalness.value_vec4.x as f32
+        } else {
+            0.0
+        },
+        roughness: if m.pbr.roughness.has_value {
+            m.pbr.roughness.value_vec4.x as f32
+        } else {
+            0.8
+        },
+        // An emission texture is meant to glow at full strength.
+        emissive_factor: if m.pbr.emission_color.texture.is_some()
+            || m.fbx.emission_color.texture.is_some()
+        {
+            [1.0; 3]
+        } else {
+            [0.0; 3]
+        },
+        ..Default::default()
     }
 }
 

@@ -126,6 +126,34 @@ pub fn export_maps(
 }
 
 impl SpriteTab {
+    pub fn clear_asset(&mut self) {
+        let keep = (
+            std::mem::take(&mut self.settings),
+            std::mem::take(&mut self.light),
+            self.view_mode,
+            self.export_godot,
+            self.light_follows_mouse,
+        );
+        *self = Self::default();
+        (
+            self.settings,
+            self.light,
+            self.view_mode,
+            self.export_godot,
+            self.light_follows_mouse,
+        ) = keep;
+    }
+
+    pub fn revert_to_defaults(&mut self) {
+        let d = Self::default();
+        self.settings = d.settings;
+        self.light = d.light;
+        self.export_godot = d.export_godot;
+        self.light_follows_mouse = d.light_follows_mouse;
+        self.last_key.clear();
+        self.shown_key.clear();
+    }
+
     pub fn open_dialog(&mut self, sh: &mut Shared) {
         if let Some(p) = rfd::FileDialog::new()
             .add_filter("Images", &IMAGE_EXTS)
@@ -196,6 +224,24 @@ impl SpriteTab {
                 .clicked()
             {
                 self.batch(sh);
+            }
+        });
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(self.source.is_some(), egui::Button::new("Clear"))
+                .on_hover_text("Unload the image (settings are kept)")
+                .clicked()
+            {
+                self.clear_asset();
+                sh.status = "Cleared.".into();
+            }
+            if ui
+                .button("Revert to defaults")
+                .on_hover_text("Reset this tab's settings")
+                .clicked()
+            {
+                self.revert_to_defaults();
+                sh.status = "Settings reverted to defaults.".into();
             }
         });
         if let Some(p) = &self.path {

@@ -75,6 +75,8 @@ pub fn visible_triangles(
             texture: None,
             id_base: bases[i],
             double_sided: false,
+            normals: &[],
+            pbr: None,
         })
         .collect();
     let opts = RasterOptions {
@@ -159,6 +161,8 @@ impl DepthMap {
                 texture: None,
                 id_base: 0,
                 double_sided: true,
+                normals: &[],
+                pbr: None,
             })
             .collect();
         let v = ortho_view(center, radius, dir);

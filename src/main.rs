@@ -57,6 +57,8 @@ enum Cmd {
         #[command(subcommand)]
         action: BlenderCmd,
     },
+    /// List built-in and user presets.
+    Presets,
     /// Run as an MCP server on stdio for coding agents.
     Mcp {
         /// Workspace folder tool paths must stay inside (default: current directory).
@@ -203,6 +205,32 @@ struct ModelArgs {
     /// Don't write the 320x240 preview PNG.
     #[arg(long)]
     no_preview: bool,
+    /// UV layout: a fresh atlas with everything rebaked into one texture, or the original UVs.
+    #[arg(long, value_enum, default_value_t = Uv::Atlas)]
+    uv: Uv,
+    /// Bake this piece into the texture instead of keeping its geometry (repeatable).
+    #[arg(long = "bake-piece")]
+    bake_pieces: Vec<String>,
+    /// Rebake search distance, % of the model size [default: 3].
+    #[arg(long)]
+    bake_distance: Option<f32>,
+    /// Atlas chart crease angle in degrees [default: 60].
+    #[arg(long)]
+    chart_angle: Option<f32>,
+    /// Start from a preset (built-in or user name, or a .json file); other options
+    /// override it only where they differ from their defaults. See `psx-forge presets`.
+    #[arg(long)]
+    preset: Option<String>,
+    /// HD texture: keep the source's texel density and full colour (no palette, dither
+    /// or 15-bit) on the low-poly model. Pixel-sharp but high resolution.
+    #[arg(long)]
+    hd_texture: bool,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum Uv {
+    Atlas,
+    Keep,
 }
 
 #[derive(Args)]
@@ -221,6 +249,9 @@ struct PreviewArgs {
     clip: Option<String>,
     #[arg(long, default_value_t = 0.0)]
     time: f32,
+    /// ps1 (PlayStation look) or pbr (modern reference shading of the source).
+    #[arg(long, default_value = "ps1")]
+    shading: String,
 }
 
 #[derive(Args)]
@@ -412,10 +443,46 @@ fn main() -> Result<()> {
                 scale: a.scale,
                 fbx: a.fbx.then_some(true),
                 preview: !a.no_preview,
+                uv: match a.uv {
+                    Uv::Atlas => "atlas",
+                    Uv::Keep => "keep",
+                }
+                .into(),
+                bake_pieces: a.bake_pieces,
+                bake_distance: a.bake_distance,
+                chart_angle: a.chart_angle,
+                preset: a.preset,
+                hd_texture: a.hd_texture,
             };
             ops::convert_model(&o, &progress)?
         }
         Some(Cmd::Inspect { path }) => ops::inspect_model(&path)?,
+        Some(Cmd::Presets) => {
+            let plain =
+                |v: &serde_json::Value| v.as_str().map_or_else(|| v.to_string(), String::from);
+            let v = ops::list_presets();
+            if !json {
+                for group in ["builtin", "user"] {
+                    for p in v[group].as_array().into_iter().flatten() {
+                        println!(
+                            "{:<28} {:<14} {:>6} tris {:>4} px {:>3} colours  {}",
+                            p["name"].as_str().unwrap_or(""),
+                            p["category"].as_str().unwrap_or(group),
+                            p["tris"].as_str().unwrap_or(""),
+                            plain(&p["texture"]),
+                            plain(&p["colors"]),
+                            if group == "user" { "(user)" } else { "" }
+                        );
+                    }
+                }
+                eprintln!(
+                    "User presets live in {}",
+                    v["user_dir"].as_str().unwrap_or("")
+                );
+                return Ok(());
+            }
+            v
+        }
         Some(Cmd::Preview(a)) => {
             let out = a
                 .out
@@ -428,6 +495,7 @@ fn main() -> Result<()> {
                 yaw_degrees: a.yaw,
                 clip: a.clip,
                 time: a.time,
+                shading: a.shading,
                 output: Some(out.clone()),
             };
             let (mut v, _) = ops::render_preview(&job)?;

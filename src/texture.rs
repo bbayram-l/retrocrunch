@@ -98,6 +98,7 @@ pub enum AlphaMode {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CrunchSettings {
     /// Longest side in pixels (4..=2048). Non-square textures keep aspect.
     pub max_size: u32,
@@ -314,7 +315,21 @@ fn opaque_pixels(img: &RgbaImage, threshold: u8) -> Vec<Rgb> {
 }
 
 /// Build the palette that `crunch` would use for this (already resized) image.
-pub fn build_palette(pixels: &[Rgb], s: &CrunchSettings, imported: Option<&[Rgb]>) -> Vec<Rgb> {
+/// Whether quantising `img` with `s` leaves cutout (fully transparent) texels, which
+/// need their own CLUT entry.
+pub fn has_cutout_texels(img: &RgbaImage, s: &CrunchSettings) -> bool {
+    s.alpha == AlphaMode::Cutout && img.pixels().any(|p| p.0[3] < s.alpha_threshold)
+}
+
+/// Palette for the opaque `pixels`. With `reserve_transparent`, one CLUT slot is left
+/// free for the transparent entry, so a 16-colour cutout texture still fits 4 bits.
+pub fn build_palette(
+    pixels: &[Rgb],
+    s: &CrunchSettings,
+    imported: Option<&[Rgb]>,
+    reserve_transparent: bool,
+) -> Vec<Rgb> {
+    let colors = (s.colors - usize::from(reserve_transparent)).clamp(2, 256);
     let snap = |p: Vec<Rgb>| -> Vec<Rgb> {
         if s.rgb555 {
             palette::dedup_keep_order(&p.into_iter().map(palette::snap_rgb555).collect::<Vec<_>>())
@@ -325,9 +340,9 @@ pub fn build_palette(pixels: &[Rgb], s: &CrunchSettings, imported: Option<&[Rgb]
     match (s.palette_mode, imported) {
         (PaletteMode::Rgb555Only, _) => Vec::new(),
         (PaletteMode::ImportedAll, Some(p)) => p.to_vec(),
-        (PaletteMode::ImportedBestN, Some(p)) => palette::best_n_from(pixels, p, s.colors),
+        (PaletteMode::ImportedBestN, Some(p)) => palette::best_n_from(pixels, p, colors),
         // Imported mode without a palette falls back to auto.
-        _ => snap(palette::kmeans_palette(pixels, s.colors.clamp(2, 256), 12)),
+        _ => snap(palette::kmeans_palette(pixels, colors, 12)),
     }
 }
 
@@ -387,7 +402,7 @@ pub fn crunch(
         1
     };
     let pixels = opaque_pixels(&img, thr);
-    let pal = build_palette(&pixels, s, imported);
+    let pal = build_palette(&pixels, s, imported, has_cutout_texels(&img, s));
     let image = quantize(&img, s, &pal);
     let has_transparency = image.pixels().any(|p| p.0[3] < 255);
     Crunched {
@@ -432,7 +447,12 @@ pub fn save_png(path: &Path, img: &RgbaImage, indexed: bool) -> Result<()> {
 }
 
 fn to_indexed(img: &RgbaImage) -> Option<(Vec<[u8; 4]>, Vec<u8>)> {
-    let mut pal: Vec<[u8; 4]> = Vec::new();
+    // Transparent goes first: index 0 is the PS1 convention (and keeps tRNS short).
+    let mut pal: Vec<[u8; 4]> = if img.pixels().any(|p| p.0[3] == 0) {
+        vec![[0, 0, 0, 0]]
+    } else {
+        Vec::new()
+    };
     let mut idx = Vec::with_capacity((img.width() * img.height()) as usize);
     for p in img.pixels() {
         let c = if p.0[3] == 0 { [0, 0, 0, 0] } else { p.0 };
@@ -448,7 +468,6 @@ fn to_indexed(img: &RgbaImage) -> Option<(Vec<[u8; 4]>, Vec<u8>)> {
         };
         idx.push(i as u8);
     }
-    // tRNS entries must come first for minimal size; not required for correctness.
     Some((pal, idx))
 }
 
@@ -503,6 +522,29 @@ mod tests {
         for p in out.image.pixels() {
             assert!(pal.contains(&[p.0[0], p.0[1], p.0[2]]));
         }
+    }
+
+    #[test]
+    fn cutout_16_colours_fits_a_4bit_clut_with_transparent_first() {
+        let mut img = gradient(64, 64);
+        for (x, _, p) in img.enumerate_pixels_mut() {
+            if x < 8 {
+                p.0[3] = 0;
+            }
+        }
+        let s = CrunchSettings {
+            max_size: 64,
+            colors: 16,
+            alpha: AlphaMode::Cutout,
+            dither: DitherMode::None,
+            ..Default::default()
+        };
+        let c = crunch(&img, &s, &BakeMaps::default(), None);
+        assert!(c.palette.len() <= 15, "palette {}", c.palette.len());
+        let (pal, idx) = to_indexed(&c.image).unwrap();
+        assert!(pal.len() <= 16, "CLUT {}", pal.len());
+        assert_eq!(pal[0], [0, 0, 0, 0]);
+        assert_eq!(idx[0], 0, "transparent texel uses index 0");
     }
 
     #[test]

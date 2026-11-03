@@ -28,11 +28,30 @@ Check it with the `blender_info` tool or `psx-forge blender status`.
 4. Adjust and repeat. Typical knobs:
    - Silhouette too blocky: raise `tris`.
    - Texture muddy: raise `colors` or `tex_size`, or lower `dither_amount`.
+   - Want PS1 geometry but the source's full texture detail ("pixelated but HD"): pass
+     `hd_texture: true`. The texture keeps the source's texel density and full colour
+     (no palette, dither or 15-bit); `tex_size` and `colors` are ignored.
    - Floors and walls warp: set `subdivide` to about 1/4 of the model size.
    - Holes in the mesh: set `remove_hidden: false`.
+   - Small separate parts (straps, pockets, decals, badges) waste triangles: pass their
+     piece names from `inspect_model` in `bake_pieces`. They are removed from the
+     geometry and painted into the texture underneath. If they don't show up, raise
+     `bake_distance` (% of model size, default 3).
+   - Textures are rebaked into a fresh atlas by default (`uv: "atlas"`). Use
+     `uv: "keep"` for tiling textures (floors, walls) that must keep repeating.
 
 PS1 budgets for reference: props 100-500 triangles, characters 300-1500, 64-256 px
 textures, 16-colour (4-bit) or 256-colour (8-bit) palettes.
+
+## Presets
+
+`list_presets` returns built-in templates (characters, environment, props, vehicles,
+styles, and a "High quality" group for PS2/Dreamcast-era or remaster budgets) and the
+user's saved presets. Pass `preset: "<name>"` to `convert_model` as the
+base: any other argument you give that differs from its default overrides it, e.g.
+`{"input": "zombie.fbx", "preset": "Survival horror character", "tris": 700}`.
+To compare against the source, call `render_preview` with `shading: "pbr"` on the
+original file (modern reference shading), then with the default PS1 shading on the result.
 
 ## Shared palette across a project
 

@@ -132,6 +132,18 @@ pub struct ModelOptions {
     /// Force FBX on/off (FBX needs Blender).
     pub fbx: Option<bool>,
     pub preview: bool,
+    /// "atlas" (fresh UV atlas + rebake into one texture) or "keep" (original UVs).
+    pub uv: String,
+    /// Names of pieces to bake into the texture instead of keeping as geometry.
+    pub bake_pieces: Vec<String>,
+    /// Rebake search distance, % of the model size (default 3).
+    pub bake_distance: Option<f32>,
+    /// Atlas chart crease angle in degrees (default 60).
+    pub chart_angle: Option<f32>,
+    /// Preset name (built-in or user) or .json file used as the base settings.
+    pub preset: Option<String>,
+    /// HD texture: source texel density and full colour on the low-poly model.
+    pub hd_texture: bool,
 }
 
 impl Default for ModelOptions {
@@ -153,6 +165,12 @@ impl Default for ModelOptions {
             scale: None,
             fbx: None,
             preview: true,
+            uv: "atlas".into(),
+            bake_pieces: Vec::new(),
+            bake_distance: None,
+            chart_angle: None,
+            preset: None,
+            hd_texture: false,
         }
     }
 }
@@ -196,33 +214,23 @@ pub fn inspect_model(path: &Path) -> Result<Value> {
 pub fn convert_model(o: &ModelOptions, progress: process::Progress) -> Result<Value> {
     let model = Model::load(&o.input)?;
     let pal = o.texture.load_palette()?;
-    let s = ConvertSettings {
-        use_percent: o.percent.is_some(),
-        percent: o.percent.unwrap_or(10.0),
-        target_tris: o.tris.max(1),
-        remove_hidden: o.remove_hidden,
-        hidden_ignore_below: o.grounded,
-        vertex_ao: o.ao,
-        texture: o.texture.crunch()?,
-        sizing: if o.texel_cm.is_some() {
-            TextureSizing::PixelSize
-        } else {
-            TextureSizing::Fixed
-        },
-        texel_cm: o.texel_cm.unwrap_or(2.0),
-        units_per_meter: o.units_per_meter,
-        geometry_snap: o.snap,
-        subdivide_max_edge: o.subdivide,
-        ..Default::default()
+    let preset = o.preset.as_deref().map(crate::presets::find).transpose()?;
+    let s = model_settings(o, preset.as_ref().map(|p| p.convert.clone()))?;
+    let mut pieces = PieceSettings::defaults_for(&model);
+    for name in &o.bake_pieces {
+        let Some(i) = model.pieces.iter().position(|p| &p.name == name) else {
+            let names: Vec<&str> = model.pieces.iter().map(|p| p.name.as_str()).collect();
+            bail!("no piece named '{name}' (pieces: {})", names.join(", "));
+        };
+        pieces[i].baked = true;
+    }
+    let c = process::convert(&model, &pieces, &s, pal.as_deref(), progress);
+    let d = ModelOptions::default();
+    // A preset's export settings apply unless an engine was asked for explicitly.
+    let mut es = match preset.as_ref().and_then(|p| p.export.clone()) {
+        Some(e) if o.engine == d.engine => e,
+        _ => parse_engine(&o.engine)?.settings(),
     };
-    let c = process::convert(
-        &model,
-        &PieceSettings::defaults_for(&model),
-        &s,
-        pal.as_deref(),
-        progress,
-    );
-    let mut es = parse_engine(&o.engine)?.settings();
     if let Some(sc) = o.scale {
         es.scale = sc;
     }
@@ -243,12 +251,129 @@ pub fn convert_model(o: &ModelOptions, progress: process::Progress) -> Result<Va
             "vertices_after": c.stats.verts_after,
             "hidden_removed": c.stats.hidden_removed,
             "subdivided_added": c.stats.subdivided_added,
+            "atlas": c.stats.atlas.map(|(n, charts)| json!({"size": n, "charts": charts})),
             "recommended_min_tris": c.stats.recommended_min_tris,
             "textures": c.stats.textures.iter().map(|t| json!({"material": t.0, "width": t.1, "height": t.2, "colors": t.3})).collect::<Vec<_>>(),
         },
         "palettes": c.palettes.iter().map(|p| p.iter().map(|c| format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])).collect::<Vec<_>>()).collect::<Vec<_>>(),
         "warnings": c.stats.warnings,
+        "preset": preset.map(|p| p.name),
     }))
+}
+
+/// Conversion settings for `o`. Without a preset every option applies; with one, the
+/// preset is the base and only options that differ from their defaults override it
+/// (so `{"preset": "Hero character", "tris": 900}` changes just the budget).
+pub fn model_settings(
+    o: &ModelOptions,
+    preset: Option<ConvertSettings>,
+) -> Result<ConvertSettings> {
+    let d = ModelOptions::default();
+    let all = preset.is_none();
+    let mut s = preset.unwrap_or_default();
+    let set = |differs: bool| all || differs;
+    if set(o.tris != d.tris) {
+        s.target_tris = o.tris.max(1);
+        s.use_percent = false;
+    }
+    if let Some(p) = o.percent {
+        s.use_percent = true;
+        s.percent = p;
+    }
+    let (t, dt) = (&o.texture, &d.texture);
+    let crunch = t.crunch()?;
+    if set(t.tex_size != dt.tex_size) {
+        s.texture.max_size = crunch.max_size;
+    }
+    if set(t.colors != dt.colors) {
+        s.texture.colors = crunch.colors;
+    }
+    if set(t.palette != dt.palette || t.palette_mode != dt.palette_mode) {
+        s.texture.palette_mode = crunch.palette_mode;
+    }
+    if set(t.dither != dt.dither) {
+        s.texture.dither = crunch.dither;
+    }
+    if set(t.dither_amount != dt.dither_amount) {
+        s.texture.dither_amount = crunch.dither_amount;
+    }
+    if set(t.brightness != dt.brightness) {
+        s.texture.brightness = crunch.brightness;
+    }
+    if set(t.rgb555 != dt.rgb555) {
+        s.texture.rgb555 = crunch.rgb555;
+    }
+    if let Some(cm) = o.texel_cm {
+        s.sizing = TextureSizing::PixelSize;
+        s.texel_cm = cm;
+    } else if all {
+        s.sizing = TextureSizing::Fixed;
+    }
+    if set(o.units_per_meter != d.units_per_meter) {
+        s.units_per_meter = o.units_per_meter;
+    }
+    if set(o.remove_hidden != d.remove_hidden) {
+        s.remove_hidden = o.remove_hidden;
+    }
+    if set(o.grounded != d.grounded) {
+        s.hidden_ignore_below = o.grounded;
+    }
+    if set(o.ao != d.ao) {
+        s.vertex_ao = o.ao;
+    }
+    if set(o.snap != d.snap) {
+        s.geometry_snap = o.snap;
+    }
+    if set(o.subdivide != d.subdivide) {
+        s.subdivide_max_edge = o.subdivide;
+    }
+    if set(o.uv != d.uv) {
+        s.uv_mode = match o.uv.to_ascii_lowercase().as_str() {
+            "atlas" => process::UvMode::Atlas,
+            "keep" => process::UvMode::Keep,
+            other => bail!("unknown uv mode '{other}' (atlas, keep)"),
+        };
+    }
+    if let Some(b) = o
+        .bake_distance
+        .filter(|_| set(o.bake_distance != d.bake_distance))
+    {
+        s.bake_distance = b;
+    }
+    if let Some(a) = o
+        .chart_angle
+        .filter(|_| set(o.chart_angle != d.chart_angle))
+    {
+        s.chart_angle = a;
+    }
+    if set(o.hd_texture != d.hd_texture) {
+        s.hd_texture = o.hd_texture;
+    }
+    Ok(s)
+}
+
+/// Built-in and user presets (name, category, description, where it lives).
+pub fn list_presets() -> Value {
+    let (user, errors) = crate::presets::load_user();
+    let row = |p: &crate::presets::Preset| {
+        json!({
+            "name": p.name,
+            "category": p.category,
+            "description": p.description,
+            "builtin": p.builtin,
+            "path": p.path.as_ref().map(|x| x.display().to_string()),
+            "tris": if p.convert.use_percent { format!("{}%", p.convert.percent) } else { p.convert.target_tris.to_string() },
+            "texture": if p.convert.hd_texture { json!("HD") } else { json!(p.convert.texture.max_size) },
+            "colors": if p.convert.hd_texture { json!("full") } else { json!(p.convert.texture.colors) },
+            "hd_texture": p.convert.hd_texture,
+        })
+    };
+    json!({
+        "builtin": crate::presets::builtins().iter().map(row).collect::<Vec<_>>(),
+        "user": user.iter().map(row).collect::<Vec<_>>(),
+        "user_dir": crate::presets::user_dir().display().to_string(),
+        "errors": errors,
+    })
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -591,6 +716,8 @@ pub struct PreviewJob {
     pub clip: Option<String>,
     /// Time in seconds within the clip.
     pub time: f32,
+    /// "ps1" (default: the PlayStation look) or "pbr" (modern reference shading).
+    pub shading: String,
     pub output: Option<PathBuf>,
 }
 
@@ -603,6 +730,7 @@ impl Default for PreviewJob {
             yaw_degrees: 35.0,
             clip: None,
             time: 0.0,
+            shading: "ps1".into(),
             output: None,
         }
     }
@@ -638,11 +766,17 @@ pub fn render_preview(o: &PreviewJob) -> Result<(Value, Vec<u8>)> {
         }
         posed = json!({"clip": rig.clips[ci].name, "time": o.time});
     }
-    let img = export::preview_image(
+    let pbr = match o.shading.to_ascii_lowercase().as_str() {
+        "ps1" | "psx" => false,
+        "pbr" | "reference" => true,
+        other => bail!("unknown shading '{other}' (ps1, pbr)"),
+    };
+    let img = export::preview_image_shaded(
         &model,
         o.width.clamp(16, 1920),
         o.height.clamp(16, 1080),
         o.yaw_degrees.to_radians(),
+        pbr,
     );
     let mut png = Vec::new();
     img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)?;
@@ -692,4 +826,35 @@ pub fn blender_info() -> Value {
 pub fn blender_convert(input: &Path, output: &Path) -> Result<Value> {
     crate::blender::to_glb(input, output)?;
     Ok(json!({"output": output.display().to_string()}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preset_is_base_and_only_changed_options_override_it() {
+        let hero = crate::presets::find("Hero character").unwrap().convert;
+        // Only `tris` differs from the defaults: everything else comes from the preset.
+        let o = ModelOptions {
+            tris: 900,
+            ..Default::default()
+        };
+        let s = model_settings(&o, Some(hero.clone())).unwrap();
+        assert_eq!(s.target_tris, 900);
+        assert_eq!(s.texture.max_size, hero.texture.max_size);
+        assert_eq!(s.texture.colors, hero.texture.colors);
+        // Without a preset every option applies, exactly like before presets existed.
+        let s = model_settings(&ModelOptions::default(), None).unwrap();
+        assert_eq!(s.target_tris, 600);
+        assert_eq!(s.texture.max_size, 128);
+        // Photoscan's wider bake search survives when the caller doesn't set it.
+        let scan = crate::presets::find("photoscan prop").unwrap().convert;
+        assert_eq!(
+            model_settings(&ModelOptions::default(), Some(scan))
+                .unwrap()
+                .bake_distance,
+            5.0
+        );
+    }
 }

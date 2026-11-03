@@ -55,6 +55,19 @@ impl Default for ScaleTab {
 const MAX_PIXELS: u32 = 1024 * 1024;
 
 impl ScaleTab {
+    pub fn clear_asset(&mut self) {
+        let keep = (self.scaler, self.tolerance, self.pre_downscale);
+        *self = Self::default();
+        (self.scaler, self.tolerance, self.pre_downscale) = keep;
+    }
+
+    pub fn revert_to_defaults(&mut self) {
+        let d = Self::default();
+        (self.scaler, self.tolerance, self.pre_downscale) =
+            (d.scaler, d.tolerance, d.pre_downscale);
+        self.last_key.clear();
+    }
+
     pub fn open_dialog(&mut self, sh: &mut Shared) {
         if let Some(p) = rfd::FileDialog::new()
             .add_filter("Images", &IMAGE_EXTS)
@@ -116,6 +129,24 @@ impl ScaleTab {
             }
             if ui.button("Batch...").clicked() {
                 self.batch(sh);
+            }
+        });
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(self.source.is_some(), egui::Button::new("Clear"))
+                .on_hover_text("Unload the image (settings are kept)")
+                .clicked()
+            {
+                self.clear_asset();
+                sh.status = "Cleared.".into();
+            }
+            if ui
+                .button("Revert to defaults")
+                .on_hover_text("Reset this tab's settings")
+                .clicked()
+            {
+                self.revert_to_defaults();
+                sh.status = "Settings reverted to defaults.".into();
             }
         });
         if let Some(p) = &self.path {

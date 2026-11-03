@@ -264,6 +264,12 @@ pub struct Material {
     pub ao: Option<GrayImage>,
     pub normal: Option<RgbaImage>,
     pub emissive: Option<RgbaImage>,
+    /// PBR inputs, used by the reference ("Original") viewport.
+    pub metallic: f32,
+    pub roughness: f32,
+    /// glTF layout: roughness in G, metalness in B.
+    pub metal_rough: Option<RgbaImage>,
+    pub emissive_factor: [f32; 3],
 }
 
 impl Default for Material {
@@ -275,6 +281,11 @@ impl Default for Material {
             ao: None,
             normal: None,
             emissive: None,
+            metallic: 0.0,
+            roughness: 1.0,
+            metal_rough: None,
+            // glTF semantics: emission = factor x texture, black by default.
+            emissive_factor: [0.0; 3],
         }
     }
 }
@@ -539,7 +550,11 @@ fn load_obj(path: &Path) -> Result<Model> {
                     .normal_texture
                     .as_deref()
                     .and_then(|t| load_image_rgba(&tex_path(t))),
-                emissive: None,
+                // OBJ shininess (Ns, 0..1000) mapped to roughness.
+                roughness: m
+                    .shininess
+                    .map_or(1.0, |ns| (1.0 - (ns / 1000.0).sqrt()).clamp(0.05, 1.0)),
+                ..Default::default()
             }
         })
         .collect();
@@ -658,6 +673,10 @@ fn load_gltf(path: &Path) -> Result<Model> {
                 }),
                 normal: tex(m.normal_texture().map(|i| i.texture())),
                 emissive: tex(m.emissive_texture().map(|i| i.texture())),
+                metallic: pbr.metallic_factor(),
+                roughness: pbr.roughness_factor(),
+                metal_rough: tex(pbr.metallic_roughness_texture().map(|i| i.texture())),
+                emissive_factor: m.emissive_factor(),
             }
         })
         .collect();

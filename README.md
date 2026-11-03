@@ -25,7 +25,13 @@ Requires the Rust MSVC toolchain plus the Visual Studio C++ build tools (meshopt
 
 - Drag and drop files onto the window: models go to **Model**, palettes (`.gpl .pal .act .hex .txt`) go to the palette library, and images go to the current image tab.
 - **Model viewport**: LMB orbit, RMB/MMB or Shift+LMB pan, wheel zoom. Header toggles cover jitter, affine UVs, dither, 15-bit colour, Z-buffer (off = PS1 ordering-table sorting), textures, fog, turntable and resolution (224p / 240p / 480i / native).
-- **Pieces list**: enable/delete, merge (same material), per-piece budget weight, undo/redo (Ctrl+Z / Ctrl+Y).
+- **HD texture** (Texture > Quality > HD, `--hd-texture`, MCP `hd_texture`): low-poly PS1 geometry wearing the source's full-resolution, full-colour texture. The new atlas is sized to keep the source's texel density (up to 4096 px); with Keep original UVs the source textures pass through untouched. No palette, dither or 15-bit snap; texels stay pixel-sharp (nearest filtering, mipmapped in the Godot shader so big textures don't shimmer). The PS1 screen effects (jitter, affine, dither) still apply in the viewport and the Godot shader.
+- **Presets**: the Preset picker applies a built-in template or one of your saved presets. Its `...` menu has Save as preset, Import/Export preset file, Delete, Open presets folder and Reload. "(modified)" shows when you've changed settings since applying. User presets are JSON files in `%APPDATA%\psx-forge\presets` (or `~/.config/psx-forge/presets`; override with `PSXFORGE_PRESETS`).
+- **Revert to defaults** resets the tab's settings; **Clear** unloads the current asset and keeps the settings. Both are on every tab (Blocks has Defaults; New clears the level).
+- **GPU viewport**: on by default (the `GPU` toggle). OpenGL renders the same PS1 pipeline as the CPU rasterizer (jitter, affine weight, dither table, 15-bit, fog) at the retro resolution and scales it up with nearest filtering, so Native resolution and big models stay smooth. The CPU rasterizer takes over when Z-buffer is off (the PS1 ordering table needs painter's sorting), when OpenGL is unavailable, or if the shaders fail (the toggle's tooltip shows why). Previews written by the CLI/MCP always use the CPU.
+- **Original view** is a modern PBR reference: GGX with metal/roughness maps, normal maps, emission, AO and a studio environment, rendered on all cores. The PS1 toggles (jitter, affine, dither, 15-bit, fog) only affect the PSX view.
+- **Pieces list**: enable/delete, merge (same material), per-piece budget weight, **Bake** (remove the piece from the geometry but paint it into the texture underneath; **Restore** brings it back), undo/redo (Ctrl+Z / Ctrl+Y).
+- **UV layout**: **New atlas** (default) unwraps the low-poly mesh into one tightly packed atlas and rebakes every material from the full-resolution source, so low budgets don't smear textures across seams and the model uses a single texture page. **Keep original** keeps the source UVs (best for tiling textures).
 - **Split polygons over**: edges longer than this (world units) are split without cracks, so affine warping stays small on big floors and walls. 0 turns it off.
 - **Rigged models**: an Animation bar plays and scrubs every clip in the PS1 viewport (CPU skinning). The panel suggests a minimum triangle count for the rig, about 20 triangles per deforming joint; you can go lower, it only warns.
 - **Pixel size mode**: one texel size (cm) for the whole game, so every asset gets the atlas resolution that matches.
@@ -44,8 +50,13 @@ psx-forge scale sprite.png -o out -a scale3x
 psx-forge model fox.glb -o out --tris 500 --subdivide 0.5        # rigged: skeleton + clips kept
 psx-forge blocks level.json -o out --godot-collision --subdivide 4
 psx-forge model hero.fbx --engine unity --tris 900                # FBX in, FBX out (via Blender)
+psx-forge model jacket.glb --tris 400 --bake-piece pocket --bake-piece strap   # paint loose pieces into the texture
+psx-forge model tiles.obj --uv keep                               # keep original UVs (tiling textures)
 psx-forge model scene.blend -o out                                # .blend/USD/Alembic via Blender
 psx-forge inspect hero.fbx --json                                 # triangles, rig, clips, morphs
+psx-forge presets                                                 # built-in templates + your presets
+psx-forge model zombie.fbx --preset "Survival horror character" --tris 700   # preset, budget overridden
+psx-forge preview helmet.glb --shading pbr -o reference.png       # modern reference render
 psx-forge preview out/hero/hero.glb --clip Run --time 0.4 -o run.png
 psx-forge palette concept.png --colors 16 --save shared.gpl
 psx-forge blender status
@@ -131,8 +142,30 @@ For block levels, the `-col` node suffix makes Godot generate a `StaticBody3D` t
 - Morph targets keep their names (from `targetNames`, accessor names or FBX channel names) and default weights. Their deltas stay aligned with vertices through decimation, compaction and subdivision. Morphed vertices get decimation priority, and morph pieces are protected from hidden-face removal. Weight animation (glTF `weights`, FBX `DeformPercent`) is exported and previewed.
 - The export scale also scales node translations, inverse bind matrices and translation keys, so a rig exported at 100x for Unreal still animates correctly.
 
+## Presets
+
+Built-in templates:
+
+| Category | Presets |
+|---|---|
+| Characters | Hero character, NPC / enemy, Survival horror character, Boss / showcase |
+| Environment | Architecture (tiling), Environment prop (2 cm texels), Distant LOD / background |
+| Props & items | Item / pickup, Weapon (first person), Photoscan prop |
+| Vehicles | Vehicle |
+| Style | Strict PS1 hardware, Concept art match (uses your loaded palette), Clean low-poly (no dither) |
+| High quality | HQ character (6000 tris, 1024 px), HQ prop (2500, 512 px), HQ environment (8000, tiling UVs), HQ vehicle (5000, 1024 px), PSX model, HD texture (1500 tris, source texture), Late-90s PC (high-res textures), Max quality (archive: 50% tris, 2048 px) |
+
+The High quality templates go past PS1 limits (256 colours, no 15-bit snap, little or no dither) for PS2/Dreamcast-era looks, remasters, or a clean master to crunch further later.
+
+A preset stores the full conversion settings, plus export settings if you choose to include them. Built-ins leave your engine choice alone. On the CLI and over MCP, `preset` is the base and any option that differs from its default overrides it.
+
+## UV atlas and rebake
+
+- **Charts:** faces are grouped while their normals stay within the chart angle (default 60 degrees) of the chart's largest face, so a chart's projection never folds. Slivers left by decimation merge into a neighbouring chart. Each chart is projected onto its average plane at one uniform texel density (Pixel size mode stays exact) and rotated to its tightest bounding box.
+- **Packing:** charts are shelf-packed into a square atlas, with the largest density that fits found by binary search. Gutters are 2 texels (1 at 128 px and below) and filled by dilation, so nearest sampling never shows seams.
+- **Rebake:** each atlas texel averages up to 6x6 samples, enough to cover the source texels it spans. Each sample is a ray from just above the low-poly surface back along its normal (the search distance defaults to 3% of the model size). The outermost front-facing source hit wins, with the closest point as a fallback. The source colour is texture x base colour x vertex colour, with AO, normal relief and emission already applied.
+- **Bake into texture:** pieces marked **Bake** are part of the bake source but not of the output geometry. Because the outermost hit wins, a strap, pocket or decal sitting on the surface is painted onto the surface underneath. Baking pieces always uses the atlas.
+
 ## Not supported yet
 
 - OBJ has no skeleton or animation in the format, so rigged models export to OBJ in their bind pose. Use GLB or FBX for animation.
-- Fresh UV atlas unwrap and re-bake. The original UVs are kept, so very low budgets on models with many UV charts can smear textures at seams. Raise "UV seam care" or the triangle budget.
-- "Bake loose pieces into the texture". Use Delete on the piece instead.

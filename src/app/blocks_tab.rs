@@ -158,6 +158,9 @@ fn grid_pieces(layer: i32) -> Vec<RenderPiece> {
         indices,
         texture: Some(1),
         double_sided: true,
+        normals: Vec::new(),
+        vertex_colors: Vec::new(),
+        material: None,
     }]
 }
 
@@ -214,6 +217,9 @@ impl BlocksTab {
             indices: piece.indices,
             texture: Some(0),
             double_sided: false,
+            normals: Vec::new(),
+            vertex_colors: Vec::new(),
+            material: None,
         };
         let (lo, hi) = self
             .world
@@ -223,6 +229,7 @@ impl BlocksTab {
         self.scene = Some(RenderScene {
             pieces: vec![rp],
             textures: vec![self.atlas.clone(), Some(grid_texture())],
+            materials: Vec::new(),
             lo,
             hi,
             generation: self.generation,
@@ -262,6 +269,23 @@ impl BlocksTab {
             }
             if ui.button("Open...").clicked() {
                 self.open_project(sh);
+            }
+            if ui
+                .button("Defaults")
+                .on_hover_text("Reset tool, brush and export settings (the level is kept)")
+                .clicked()
+            {
+                let d = Self::default();
+                self.tool = d.tool;
+                self.brush = d.brush;
+                self.layer = d.layer;
+                self.godot_collision = d.godot_collision;
+                self.face_shading = d.face_shading;
+                self.glb = d.glb;
+                self.obj = d.obj;
+                self.subdivisions = d.subdivisions;
+                self.dirty = true;
+                sh.status = "Blocks settings reverted to defaults.".into();
             }
             if ui.button("Save...").clicked() {
                 self.save_project(sh);
@@ -542,7 +566,7 @@ impl BlocksTab {
         self.viewport.toolbar(ui);
         let info = self
             .viewport
-            .show(ui, self.scene.as_ref(), Controls::Editor, &self.grid);
+            .show(ui, self.scene.as_ref(), Controls::Editor, &self.grid, false);
         axis_gizmo(ui, &info);
         if info.response.hovered() {
             self.shortcuts(ui);

@@ -1,6 +1,7 @@
 //! The model conversion pipeline: pieces -> budget -> decimate ->
 //! hidden-face removal -> vertex lighting -> texture crunch (optionally shared palette) -> snap.
 
+use crate::bake::{self, BakeSource, SourceMaps};
 use crate::decimate::{self, DecimateOptions};
 use crate::mesh::{Material, Model, Piece};
 use crate::palette::Rgb;
@@ -17,6 +18,10 @@ pub struct PieceSettings {
     pub weight: f32,
     /// Pieces with the same group id (and material) are merged before converting.
     pub group: usize,
+    /// "Bake into the texture": the piece leaves the output geometry but its colour is
+    /// painted onto the surface underneath (needs the UV atlas).
+    #[serde(default)]
+    pub baked: bool,
 }
 
 impl PieceSettings {
@@ -26,9 +31,31 @@ impl PieceSettings {
                 enabled: true,
                 weight: 1.0,
                 group: i,
+                baked: false,
             })
             .collect()
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UvMode {
+    /// Keep the source UVs (texture is resized per material).
+    Keep,
+    /// Unwrap a fresh atlas for the low-poly mesh and rebake everything into one texture.
+    Atlas,
+}
+
+fn default_uv_mode() -> UvMode {
+    UvMode::Atlas
+}
+fn default_chart_angle() -> f32 {
+    60.0
+}
+fn default_bake_distance() -> f32 {
+    3.0
+}
+fn default_atlas_padding() -> u32 {
+    2
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,6 +66,7 @@ pub enum TextureSizing {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ConvertSettings {
     pub use_percent: bool,
     pub target_tris: usize,
@@ -78,6 +106,21 @@ pub struct ConvertSettings {
     /// warping stays small, like PS1 games did. 0 = off.
     #[serde(default)]
     pub subdivide_max_edge: f32,
+    /// UV layout of the output.
+    #[serde(default = "default_uv_mode")]
+    pub uv_mode: UvMode,
+    /// Atlas charts group faces whose normals stay within this many degrees.
+    #[serde(default = "default_chart_angle")]
+    pub chart_angle: f32,
+    /// Rebake search distance above/below the low-poly surface, % of the model size.
+    #[serde(default = "default_bake_distance")]
+    pub bake_distance: f32,
+    /// Gutter between atlas charts, in texels.
+    #[serde(default = "default_atlas_padding")]
+    pub atlas_padding: u32,
+    /// HD texture: keep the source's texel density and full colour (no palette, dither
+    /// or 15-bit snap) on the low-poly model. Still pixel-sharp with nearest filtering.
+    pub hd_texture: bool,
 }
 
 impl Default for ConvertSettings {
@@ -98,6 +141,7 @@ impl Default for ConvertSettings {
             sun_strength: 0.6,
             ambient: 0.55,
             bake_shading_into_texture: false,
+            hd_texture: false,
             texture: CrunchSettings::default(),
             sizing: TextureSizing::Fixed,
             texel_cm: 2.0,
@@ -110,6 +154,10 @@ impl Default for ConvertSettings {
             shared_palette: true,
             geometry_snap: 0.0,
             subdivide_max_edge: 0.0,
+            uv_mode: UvMode::Atlas,
+            chart_angle: 60.0,
+            bake_distance: 3.0,
+            atlas_padding: 2,
         }
     }
 }
@@ -135,6 +183,8 @@ pub struct Stats {
     pub subdivided_added: usize,
     /// Suggested lower bound for rigged models (0 when not rigged).
     pub recommended_min_tris: usize,
+    /// Fresh atlas, if one was made: (size in texels, number of charts).
+    pub atlas: Option<(u32, usize)>,
     pub textures: Vec<(String, u32, u32, usize)>,
     pub warnings: Vec<String>,
 }
@@ -159,11 +209,12 @@ pub fn gather_pieces(model: &Model, ps: &[PieceSettings]) -> Vec<Piece> {
     let mut groups: Vec<(usize, MergeKey, Piece)> = Vec::new();
     for (i, p) in model.pieces.iter().enumerate() {
         let s = ps.get(i).cloned().unwrap_or(PieceSettings {
+            baked: false,
             enabled: true,
             weight: 1.0,
             group: i,
         });
-        if !s.enabled {
+        if !s.enabled || s.baked {
             continue;
         }
         if let Some((_, _, g)) = groups
@@ -183,6 +234,73 @@ pub fn gather_pieces(model: &Model, ps: &[PieceSettings]) -> Vec<Piece> {
         }
     }
     groups.into_iter().map(|g| g.2).collect()
+}
+
+/// Everything the atlas is baked from: all enabled pieces at full resolution, including
+/// pieces marked "baked" (which are left out of the output geometry).
+pub fn bake_source_pieces(model: &Model, ps: &[PieceSettings]) -> Vec<Piece> {
+    model
+        .pieces
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| ps.get(*i).is_none_or(|s| s.enabled || s.baked))
+        .map(|(_, p)| p.clone())
+        .collect()
+}
+
+/// Square atlas size: the fixed texture size, or (Pixel size mode) enough texels for the
+/// whole surface at the chosen texel size, assuming ~65% packing efficiency.
+pub fn atlas_size_for(pieces: &[Piece], s: &ConvertSettings) -> u32 {
+    let n = match s.sizing {
+        TextureSizing::Fixed => s.texture.max_size,
+        TextureSizing::PixelSize => {
+            let world: f32 = pieces.iter().map(Piece::surface_area).sum();
+            let texel = (s.texel_cm / 100.0 * s.units_per_meter).max(1e-6);
+            ((world / 0.65).sqrt() / texel).round() as u32
+        }
+    };
+    let n = n.clamp(8, 2048);
+    if s.texture.power_of_two {
+        let p = n.next_power_of_two();
+        if p > n && p / 2 >= 8 && (s.sizing == TextureSizing::Fixed) {
+            p / 2
+        } else {
+            p.min(2048)
+        }
+    } else {
+        n
+    }
+}
+
+/// Atlas size that keeps the source textures' texel density (HD texture mode): the
+/// texels the source UVs cover, plus packing slack, rounded to the nearest power of two.
+pub fn hd_atlas_size(source: &[Piece], materials: &[Material]) -> u32 {
+    let texels: f64 = source
+        .iter()
+        .filter_map(|p| {
+            let img = p.material.and_then(|m| materials.get(m))?.albedo.as_ref()?;
+            Some(p.uv_area() as f64 * img.width() as f64 * img.height() as f64)
+        })
+        .sum();
+    let largest = materials
+        .iter()
+        .filter_map(|m| m.albedo.as_ref())
+        .map(|i| i.width().max(i.height()))
+        .max()
+        .unwrap_or(1024);
+    // Untextured or degenerate UVs: fall back to the largest source texture.
+    let n = if texels > 1.0 {
+        (texels / 0.65).sqrt() as u32
+    } else {
+        largest
+    };
+    let p = n.clamp(128, 4096).next_power_of_two();
+    let n = if (n as f32) < p as f32 * 0.75 {
+        p / 2
+    } else {
+        p
+    };
+    n.clamp(128, 4096)
 }
 
 fn piece_weight(model: &Model, ps: &[PieceSettings], piece: &Piece) -> f32 {
@@ -298,6 +416,7 @@ fn shading_in_uv(
 struct PreparedTexture {
     image: RgbaImage,
     pixels: Vec<Rgb>,
+    cutout: bool,
 }
 
 pub fn convert(
@@ -375,18 +494,88 @@ pub fn convert(
         sun: s.sun.then(|| (s.sun_dir(), s.sun_strength)),
         ambient: if s.sun { s.ambient } else { 1.0 },
     };
-    let shade: Vec<Vec<f32>> = if s.vertex_ao || s.sun {
+    let mut shade: Vec<Vec<f32>> = if s.vertex_ao || s.sun {
         progress("Lighting vertices", 0.65);
         visibility::vertex_shading(&pieces, &shade_cfg)
     } else {
         pieces.iter().map(|p| vec![1.0; p.vertices.len()]).collect()
     };
 
+    // 3b. Fresh UV atlas: unwrap the low-poly mesh and rebake the full-resolution source
+    //     (plus pieces marked "baked") into one texture.
+    let any_baked = ps.iter().any(|p| p.baked && p.enabled);
+    let any_textured = model.materials.iter().any(|m| m.albedo.is_some());
+    let mut atlas_materials: Option<Vec<Material>> = None;
+    if (s.uv_mode == UvMode::Atlas && any_textured) || any_baked {
+        if s.uv_mode == UvMode::Keep {
+            stats.warnings.push(
+                "Baking pieces into the texture needs a fresh UV atlas: used Atlas mode.".into(),
+            );
+        }
+        progress("Unwrapping UV atlas", 0.7);
+        let src_pieces = bake_source_pieces(model, ps);
+        let n = if s.hd_texture {
+            hd_atlas_size(&src_pieces, &model.materials)
+        } else {
+            atlas_size_for(&pieces, s)
+        };
+        // Gutters cost a lot of space in tiny atlases: 1 texel is enough at <= 128 px.
+        let pad = if n <= 128 {
+            s.atlas_padding.min(1)
+        } else {
+            s.atlas_padding
+        };
+        match bake::unwrap_atlas(&mut pieces, n, pad, s.chart_angle) {
+            Some(u) => {
+                for (sh, r) in shade.iter_mut().zip(&u.remap) {
+                    if !r.is_empty() {
+                        *sh = r
+                            .iter()
+                            .map(|&o| sh.get(o as usize).copied().unwrap_or(1.0))
+                            .collect();
+                    }
+                }
+                progress("Baking textures", 0.75);
+                let source = BakeSource::new(
+                    &src_pieces,
+                    &model.materials,
+                    &SourceMaps {
+                        ao: s.bake_ao_map,
+                        ao_strength: s.ao_map_strength,
+                        normal: s.bake_normal_map,
+                        normal_strength: s.normal_map_strength,
+                        emissive: s.bake_emissive,
+                    },
+                );
+                let cage = source.diagonal * s.bake_distance.max(0.01) / 100.0;
+                let img = bake::bake_atlas(&pieces, n, &source, cage, source.supersample_for(n));
+                // Source colours (texture, base colour, vertex colour) now live in the atlas.
+                for p in &mut pieces {
+                    p.material = Some(0);
+                    for v in &mut p.vertices {
+                        v.color = [1.0, 1.0, 1.0, 1.0];
+                    }
+                }
+                atlas_materials = Some(vec![Material {
+                    name: format!("{}_atlas", model.name),
+                    albedo: Some(img),
+                    ..Default::default()
+                }]);
+                stats.atlas = Some((n, u.charts));
+            }
+            None => stats.warnings.push(format!(
+                "The UV atlas did not fit in {n}x{n}; kept the original UVs."
+            )),
+        }
+    }
+    let atlas = atlas_materials.is_some();
+    let src_materials: &[Material] = atlas_materials.as_deref().unwrap_or(&model.materials);
+
     // 4. Textures.
-    let mut materials: Vec<Material> = model.materials.clone();
+    let mut materials: Vec<Material> = src_materials.to_vec();
     let mut prepared: Vec<Option<PreparedTexture>> = Vec::with_capacity(materials.len());
     let mut baked_shading = vec![false; materials.len()];
-    for (mi, m) in model.materials.iter().enumerate() {
+    for (mi, m) in src_materials.iter().enumerate() {
         progress(
             &format!("Texture {}", m.name),
             0.75 + 0.15 * mi as f32 / materials.len().max(1) as f32,
@@ -396,17 +585,25 @@ pub fn convert(
             prepared.push(None);
             continue;
         };
-        let size = texture_size_for(&pieces, mi, s);
-        let (tw, th) = texture::target_dims(
-            albedo.width(),
-            albedo.height(),
-            size,
-            s.texture.power_of_two,
-        );
-        let mut img = texture::resize(albedo, tw, th, s.texture.filter);
+        let (tw, th) = if atlas || s.hd_texture {
+            albedo.dimensions()
+        } else {
+            texture::target_dims(
+                albedo.width(),
+                albedo.height(),
+                texture_size_for(&pieces, mi, s),
+                s.texture.power_of_two,
+            )
+        };
+        // The atlas is already baked at its final size, with the maps applied.
+        let mut img = if atlas || s.hd_texture {
+            albedo.clone()
+        } else {
+            texture::resize(albedo, tw, th, s.texture.filter)
+        };
         // glTF base colour factor tints the texture.
         let f = m.base_color;
-        if f[..3] != [1.0, 1.0, 1.0] {
+        if !atlas && f[..3] != [1.0, 1.0, 1.0] {
             for p in img.pixels_mut() {
                 for c in 0..3 {
                     p.0[c] = (p.0[c] as f32 * f[c]).clamp(0.0, 255.0) as u8;
@@ -420,7 +617,9 @@ pub fn convert(
             normal_strength: s.normal_map_strength,
             emissive: m.emissive.as_ref().filter(|_| s.bake_emissive),
         };
-        texture::bake_maps(&mut img, &maps);
+        if !atlas {
+            texture::bake_maps(&mut img, &maps);
+        }
         if s.bake_shading_into_texture && (s.vertex_ao || s.sun) {
             let fac = shading_in_uv(&pieces, mi, &shade, tw, th);
             for (i, p) in img.pixels_mut().enumerate() {
@@ -448,27 +647,51 @@ pub fn convert(
             .filter(|p| p.0[3] >= thr)
             .map(|p| [p.0[0], p.0[1], p.0[2]])
             .collect();
-        prepared.push(Some(PreparedTexture { image: img, pixels }));
+        let cutout = texture::has_cutout_texels(&img, &s.texture);
+        prepared.push(Some(PreparedTexture {
+            image: img,
+            pixels,
+            cutout,
+        }));
     }
 
     progress("Quantising palettes", 0.9);
-    let shared = if s.shared_palette && prepared.iter().filter(|p| p.is_some()).count() > 1 {
-        let all: Vec<Rgb> = prepared
-            .iter()
-            .flatten()
-            .flat_map(|p| p.pixels.iter().copied())
-            .collect();
-        Some(texture::build_palette(&all, &s.texture, imported_palette))
-    } else {
-        None
-    };
+    let shared =
+        if s.shared_palette && !s.hd_texture && prepared.iter().filter(|p| p.is_some()).count() > 1
+        {
+            let all: Vec<Rgb> = prepared
+                .iter()
+                .flatten()
+                .flat_map(|p| p.pixels.iter().copied())
+                .collect();
+            let cutout = prepared.iter().flatten().any(|p| p.cutout);
+            Some(texture::build_palette(
+                &all,
+                &s.texture,
+                imported_palette,
+                cutout,
+            ))
+        } else {
+            None
+        };
     let mut palettes = vec![Vec::new(); materials.len()];
     for (mi, prep) in prepared.into_iter().enumerate() {
         let Some(prep) = prep else { continue };
-        let pal = shared
-            .clone()
-            .unwrap_or_else(|| texture::build_palette(&prep.pixels, &s.texture, imported_palette));
-        let out = texture::quantize(&prep.image, &s.texture, &pal);
+        let (pal, out) = if s.hd_texture {
+            // Full colour: only the alpha mode applies.
+            let full = texture::CrunchSettings {
+                dither: texture::DitherMode::None,
+                rgb555: false,
+                ..s.texture.clone()
+            };
+            (Vec::new(), texture::quantize(&prep.image, &full, &[]))
+        } else {
+            let pal = shared.clone().unwrap_or_else(|| {
+                texture::build_palette(&prep.pixels, &s.texture, imported_palette, prep.cutout)
+            });
+            let out = texture::quantize(&prep.image, &s.texture, &pal);
+            (pal, out)
+        };
         stats.textures.push((
             materials[mi].name.clone(),
             out.width(),
@@ -479,13 +702,13 @@ pub fn convert(
         materials[mi].ao = None;
         materials[mi].normal = None;
         materials[mi].emissive = None;
-        materials[mi].base_color = [1.0, 1.0, 1.0, m_alpha(&model.materials[mi])];
+        materials[mi].base_color = [1.0, 1.0, 1.0, m_alpha(&src_materials[mi])];
         palettes[mi] = pal;
     }
 
     // 5. Vertex colours: lighting x original colour x (untextured) material colour.
     for (pi, p) in pieces.iter_mut().enumerate() {
-        let mat = p.material.and_then(|m| model.materials.get(m));
+        let mat = p.material.and_then(|m| src_materials.get(m));
         let textured = mat.is_some_and(|m| m.albedo.is_some());
         let tint = if textured {
             [1.0; 4]
@@ -566,6 +789,159 @@ mod tests {
             }],
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn atlas_mode_makes_one_square_texture_with_valid_uvs() {
+        let m = test_model();
+        let ps = PieceSettings::defaults_for(&m);
+        let c = convert(
+            &m,
+            &ps,
+            &ConvertSettings {
+                target_tris: 300,
+                ..Default::default()
+            },
+            None,
+            &|_, _| {},
+        );
+        assert_eq!(c.model.materials.len(), 1);
+        let tex = c.model.materials[0].albedo.as_ref().unwrap();
+        assert_eq!(tex.dimensions(), (128, 128));
+        assert!(
+            c.stats
+                .atlas
+                .is_some_and(|(n, charts)| n == 128 && charts > 1)
+        );
+        for p in &c.model.pieces {
+            assert_eq!(p.material, Some(0));
+            assert!(
+                p.vertices
+                    .iter()
+                    .all(|v| (0.0..=1.0).contains(&v.uv.x) && (0.0..=1.0).contains(&v.uv.y))
+            );
+        }
+        // Keep mode leaves the original material layout alone.
+        let keep = convert(
+            &m,
+            &ps,
+            &ConvertSettings {
+                target_tris: 300,
+                uv_mode: UvMode::Keep,
+                ..Default::default()
+            },
+            None,
+            &|_, _| {},
+        );
+        assert!(keep.stats.atlas.is_none());
+        assert_eq!(keep.model.materials.len(), m.materials.len());
+    }
+
+    #[test]
+    fn baked_piece_leaves_geometry_but_paints_the_texture() {
+        // Grey floor + small red patch floating just above it, untextured.
+        let quad = |size: f32, y: f32, mat: usize| {
+            let v = |x: f32, z: f32| crate::mesh::Vertex {
+                pos: Vec3::new(x, y, z),
+                normal: Vec3::Y,
+                uv: Vec2::new(x, z),
+                color: [1.0; 4],
+                ..Default::default()
+            };
+            Piece {
+                name: format!("q{mat}"),
+                vertices: vec![
+                    v(-size, -size),
+                    v(size, -size),
+                    v(size, size),
+                    v(-size, size),
+                ],
+                indices: vec![0, 2, 1, 0, 3, 2],
+                material: Some(mat),
+                ..Default::default()
+            }
+        };
+        let m = Model {
+            name: "floor".into(),
+            pieces: vec![quad(1.0, 0.0, 0), quad(0.3, 0.01, 1)],
+            materials: vec![
+                Material {
+                    name: "grey".into(),
+                    base_color: [0.5, 0.5, 0.5, 1.0],
+                    ..Default::default()
+                },
+                Material {
+                    name: "red".into(),
+                    base_color: [1.0, 0.0, 0.0, 1.0],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let mut ps = PieceSettings::defaults_for(&m);
+        ps[1].baked = true;
+        let s = ConvertSettings {
+            remove_hidden: false,
+            vertex_ao: false,
+            uv_mode: UvMode::Keep,
+            ..Default::default()
+        };
+        let c = convert(&m, &ps, &s, None, &|_, _| {});
+        assert_eq!(
+            c.model.pieces.len(),
+            1,
+            "the baked patch is gone from the geometry"
+        );
+        assert_eq!(c.model.tri_count(), 2);
+        assert!(
+            c.stats.warnings.iter().any(|w| w.contains("Atlas")),
+            "Keep mode is upgraded to an atlas"
+        );
+        let tex = c.model.materials[0].albedo.as_ref().unwrap();
+        let p = &c.model.pieces[0];
+        let center = p.vertices.iter().map(|v| v.uv).sum::<Vec2>() / p.vertices.len() as f32;
+        let px = tex
+            .get_pixel(
+                (center.x * tex.width() as f32) as u32,
+                (center.y * tex.height() as f32) as u32,
+            )
+            .0;
+        assert!(
+            px[0] > 180 && px[1] < 80,
+            "red patch painted onto the floor, got {px:?}"
+        );
+    }
+
+    #[test]
+    fn hd_texture_keeps_source_density_and_full_colour() {
+        let m = test_model();
+        let ps = PieceSettings::defaults_for(&m);
+        let hd = ConvertSettings {
+            target_tris: 300,
+            hd_texture: true,
+            ..Default::default()
+        };
+        // Keep mode: the source texture comes through untouched (256 px, every colour).
+        let keep = convert(
+            &m,
+            &ps,
+            &ConvertSettings {
+                uv_mode: UvMode::Keep,
+                ..hd.clone()
+            },
+            None,
+            &|_, _| {},
+        );
+        let tex = keep.model.materials[0].albedo.as_ref().unwrap();
+        assert_eq!(tex.dimensions(), (256, 256));
+        assert!(texture::count_colors(tex) > 256, "full colour, no CLUT");
+        // Atlas mode: sized from the source texel density, not the 128 px default.
+        let atlas = convert(&m, &ps, &hd, None, &|_, _| {});
+        let (n, _) = atlas.stats.atlas.unwrap();
+        assert!((256..=512).contains(&n), "atlas {n}");
+        let tex = atlas.model.materials[0].albedo.as_ref().unwrap();
+        assert!(texture::count_colors(tex) > 256);
+        assert_eq!(hd_atlas_size(&[], &[]), 1024, "untextured fallback");
     }
 
     #[test]

@@ -103,6 +103,7 @@ impl EnginePreset {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ExportSettings {
     pub preset: EnginePreset,
     pub glb: bool,
@@ -235,7 +236,7 @@ pub fn export_model(model: &Model, dir: &Path, s: &ExportSettings) -> Result<Vec
     }
     if s.godot_scene {
         let sh = dir.join("psx_lit.gdshader");
-        std::fs::write(&sh, GODOT_PSX_SHADER)?;
+        std::fs::write(&sh, godot_shader_for(model))?;
         written.push(sh);
         let p = dir.join(format!("{base}.tscn"));
         std::fs::write(&p, godot_scene(model))?;
@@ -725,7 +726,19 @@ pub fn godot_scene(model: &Model) -> String {
 
 /// Render the model like a PlayStation would (jitter, affine, dither, 15-bit) at `w`x`h`.
 pub fn preview_image(model: &Model, w: u32, h: u32, yaw: f32) -> image::RgbaImage {
-    use crate::raster::{self, DrawCall, Frame, OrbitCamera, RasterOptions};
+    preview_image_shaded(model, w, h, yaw, false)
+}
+
+/// `pbr`: modern reference render (metal/rough, normal maps, emission, environment)
+/// instead of the PS1 look; used to compare a conversion against its source.
+pub fn preview_image_shaded(
+    model: &Model,
+    w: u32,
+    h: u32,
+    yaw: f32,
+    pbr: bool,
+) -> image::RgbaImage {
+    use crate::raster::{self, DrawCall, Frame, OrbitCamera, PbrMaterial, RasterOptions};
     let (lo, hi) = model.bounds();
     let mut cam = OrbitCamera {
         yaw,
@@ -733,12 +746,18 @@ pub fn preview_image(model: &Model, w: u32, h: u32, yaw: f32) -> image::RgbaImag
         ..Default::default()
     };
     cam.frame_bounds(lo, hi);
+    let normals: Vec<Vec<glam::Vec3>> = model
+        .pieces
+        .iter()
+        .map(|p| p.vertices.iter().map(|v| v.normal).collect())
+        .collect();
     let data: Vec<(Vec<glam::Vec3>, Vec<glam::Vec2>, Vec<[f32; 4]>)> = model
         .pieces
         .iter()
         .map(|p| {
             let mat = p.material.and_then(|m| model.materials.get(m));
-            let tint = if mat.is_some_and(|m| m.albedo.is_some()) {
+            // PBR shading applies the material's base colour itself.
+            let tint = if pbr || mat.is_some_and(|m| m.albedo.is_some()) {
                 [1.0; 4]
             } else {
                 mat.map_or([1.0; 4], |m| m.base_color)
@@ -764,7 +783,8 @@ pub fn preview_image(model: &Model, w: u32, h: u32, yaw: f32) -> image::RgbaImag
         .pieces
         .iter()
         .zip(&data)
-        .map(|(p, d)| DrawCall {
+        .zip(&normals)
+        .map(|((p, d), nrm)| DrawCall {
             positions: &d.0,
             uvs: &d.1,
             colors: &d.2,
@@ -775,6 +795,11 @@ pub fn preview_image(model: &Model, w: u32, h: u32, yaw: f32) -> image::RgbaImag
                 .and_then(|m| m.albedo.as_ref()),
             id_base: 0,
             double_sided: false,
+            normals: nrm,
+            pbr: p
+                .material
+                .and_then(|m| model.materials.get(m))
+                .map(PbrMaterial::from_material),
         })
         .collect();
     let mut frame = Frame::new(w, h);
@@ -784,7 +809,11 @@ pub fn preview_image(model: &Model, w: u32, h: u32, yaw: f32) -> image::RgbaImag
         cam.view(),
         cam.proj(w as f32 / h as f32),
         &calls,
-        &RasterOptions::default(),
+        &if pbr {
+            RasterOptions::reference()
+        } else {
+            RasterOptions::default()
+        },
     );
     frame.to_rgba()
 }
@@ -793,6 +822,21 @@ pub const GODOT_APPLY_SCRIPT_NAME: &str = "psx_apply_materials.gd";
 pub const GODOT_APPLY_SCRIPT: &str = include_str!("../godot/psx_apply_materials.gd");
 
 pub const GODOT_PSX_SHADER: &str = include_str!("../godot/psx_lit.gdshader");
+
+/// HD textures (over 512 px) sample with nearest *mipmapped* filtering: texels stay sharp
+/// up close without shimmering at a distance. PS1-sized textures keep plain nearest.
+fn godot_shader_for(model: &Model) -> String {
+    let hd = model
+        .materials
+        .iter()
+        .filter_map(|m| m.albedo.as_ref())
+        .any(|i| i.width().max(i.height()) > 512);
+    if hd {
+        GODOT_PSX_SHADER.replacen("filter_nearest,", "filter_nearest_mipmap,", 1)
+    } else {
+        GODOT_PSX_SHADER.to_string()
+    }
+}
 
 #[cfg(test)]
 mod tests {

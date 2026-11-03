@@ -7,6 +7,7 @@
 //! * `blocks`   – Block level builder.
 //! * `raster`   – PS1-accurate software rasterizer used for previews and baking.
 
+pub mod bake;
 pub mod blender;
 pub mod blocks;
 pub mod decimate;
@@ -16,6 +17,7 @@ pub mod mcp;
 pub mod mesh;
 pub mod ops;
 pub mod palette;
+pub mod presets;
 pub mod process;
 pub mod raster;
 pub mod rig;

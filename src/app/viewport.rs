@@ -1,6 +1,7 @@
 //! 3D viewport: renders a scene with the PS1 software rasterizer at a retro resolution,
 //! scales it up with nearest filtering and handles orbit/pan/zoom.
 
+use super::gpu::{DrawParams, MaterialUpload, MeshUpload, SharedGpu, TextureUpload};
 use super::widgets::TexSlot;
 use egui::{Color32, Pos2, Rect, Response, Sense, Ui, Vec2};
 use glam::{Mat4, Vec2 as GVec2, Vec3};
@@ -8,6 +9,10 @@ use image::RgbaImage;
 use psx_forge::mesh::Model;
 use psx_forge::raster::{self, DrawCall, FogSettings, Frame, OrbitCamera, RasterOptions};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Set once per frame by the app when eframe runs on the glow (OpenGL) backend.
+pub static GPU_AVAILABLE: AtomicBool = AtomicBool::new(false);
 
 pub struct RenderPiece {
     pub positions: Vec<Vec3>,
@@ -16,12 +21,18 @@ pub struct RenderPiece {
     pub indices: Vec<u32>,
     pub texture: Option<usize>,
     pub double_sided: bool,
+    /// For the PBR reference view: normals, raw vertex colours and the material index.
+    pub normals: Vec<Vec3>,
+    pub vertex_colors: Vec<[f32; 4]>,
+    pub material: Option<usize>,
 }
 
 #[derive(Default)]
 pub struct RenderScene {
     pub pieces: Vec<RenderPiece>,
     pub textures: Vec<Option<RgbaImage>>,
+    /// Full materials (metal/rough, normal, emission) for the PBR reference view.
+    pub materials: Vec<psx_forge::mesh::Material>,
     pub lo: Vec3,
     pub hi: Vec3,
     /// Bumped whenever content changes so the viewport knows to re-render.
@@ -59,6 +70,9 @@ impl RenderScene {
                     indices: p.indices.clone(),
                     texture: if textured { p.material } else { None },
                     double_sided: false,
+                    normals: p.vertices.iter().map(|v| v.normal).collect(),
+                    vertex_colors: p.vertices.iter().map(|v| v.color).collect(),
+                    material: p.material,
                 }
             })
             .collect();
@@ -66,6 +80,7 @@ impl RenderScene {
         Self {
             pieces,
             textures: m.materials.iter().map(|m| m.albedo.clone()).collect(),
+            materials: m.materials.clone(),
             lo,
             hi,
             generation,
@@ -119,6 +134,10 @@ pub struct Viewport {
     pub fog: bool,
     pub bg_top: [u8; 3],
     pub bg_bottom: [u8; 3],
+    /// Render with OpenGL when available (falls back to the CPU rasterizer).
+    pub gpu: bool,
+    #[serde(skip)]
+    gpu_state: SharedGpu,
     #[serde(skip)]
     tex: TexSlot,
     #[serde(skip)]
@@ -137,6 +156,8 @@ impl Default for Viewport {
             fog: false,
             bg_top: [0x20, 0x1c, 0x3a],
             bg_bottom: [0x06, 0x06, 0x0c],
+            gpu: true,
+            gpu_state: SharedGpu::default(),
             tex: TexSlot::default(),
             last_key: String::new(),
             frame_size: (1, 1),
@@ -216,6 +237,17 @@ impl Viewport {
             ui.toggle_value(&mut self.opts.textured, "Textures");
             ui.toggle_value(&mut self.fog, "Fog");
             ui.toggle_value(&mut self.turntable, "Turntable");
+            if GPU_AVAILABLE.load(Ordering::Relaxed) {
+                let err = self.gpu_error();
+                let r = ui.toggle_value(&mut self.gpu, "GPU");
+                match err {
+                    Some(e) => r.on_hover_text(format!("GPU renderer failed, using the CPU: {e}")),
+                    None => r.on_hover_text(
+                        "Render with OpenGL (fast at native resolution). Off = CPU rasterizer. \
+                         Ordering-table mode (Z-buffer off) always uses the CPU.",
+                    ),
+                };
+            }
             if self.opts.vertex_snap {
                 ui.add(
                     egui::DragValue::new(&mut self.opts.snap_size)
@@ -234,6 +266,7 @@ impl Viewport {
         scene: Option<&RenderScene>,
         controls: Controls,
         extra: &[RenderPiece],
+        reference: bool,
     ) -> ViewInfo {
         let avail = ui.available_size().max(Vec2::splat(64.0));
         let (rect, response) = ui.allocate_exact_size(avail, Sense::click_and_drag());
@@ -260,8 +293,18 @@ impl Viewport {
         let view = self.cam.view();
         let proj = self.cam.proj(aspect);
 
+        if self.use_gpu() {
+            self.paint_gpu(ui, rect, scene, extra, reference, (fw, fh), view, proj);
+            return ViewInfo {
+                response,
+                rect,
+                view,
+                proj,
+                aspect,
+            };
+        }
         let key = format!(
-            "{:?}|{}|{fw}x{fh}|{}|{}|{}",
+            "{:?}|{}|{fw}x{fh}|{}|{}|{:?}",
             (
                 self.cam.target,
                 self.cam.yaw,
@@ -271,26 +314,19 @@ impl Viewport {
             serde_json::to_string(&self.opts).unwrap_or_default(),
             scene.map_or(0, |s| s.generation),
             self.fog,
-            extra.len()
+            (extra.len(), reference)
         );
         if key != self.last_key || self.frame_size != (fw, fh) || self.tex.handle.is_none() {
             self.last_key = key;
             self.frame_size = (fw, fh);
             let mut frame = Frame::new(fw, fh);
             frame.clear_gradient(self.bg_top, self.bg_bottom);
-            let mut opts = self.opts.clone();
-            if self.fog {
-                let d = self.cam.distance;
-                opts.fog = Some(FogSettings {
-                    color: self.bg_bottom,
-                    start: d * 0.8,
-                    end: d * 2.5,
-                });
-            }
+            // Reference view: modern PBR shading, none of the PS1 effects.
+            let opts = self.effective_opts(reference);
             let mut calls: Vec<DrawCall> = Vec::new();
             if let Some(s) = scene {
                 for p in s.pieces.iter().chain(extra) {
-                    calls.push(draw_call(p, &s.textures));
+                    calls.push(draw_call(p, s, reference));
                 }
             }
             raster::render(&mut frame, view, proj, &calls, &opts);
@@ -311,6 +347,98 @@ impl Viewport {
             proj,
             aspect,
         }
+    }
+
+    fn effective_opts(&self, reference: bool) -> RasterOptions {
+        let mut opts = if reference {
+            RasterOptions {
+                textured: self.opts.textured,
+                ..RasterOptions::reference()
+            }
+        } else {
+            self.opts.clone()
+        };
+        if self.fog && !reference {
+            let d = self.cam.distance;
+            opts.fog = Some(FogSettings {
+                color: self.bg_bottom,
+                start: d * 0.8,
+                end: d * 2.5,
+            });
+        }
+        opts
+    }
+
+    fn gpu_error(&self) -> Option<String> {
+        self.gpu_state.lock().ok().and_then(|g| g.error.clone())
+    }
+
+    /// GPU unless it's off, unavailable, failed, or the ordering table is needed.
+    fn use_gpu(&self) -> bool {
+        self.gpu
+            && self.opts.zbuffer
+            && GPU_AVAILABLE.load(Ordering::Relaxed)
+            && self.gpu_error().is_none()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn paint_gpu(
+        &mut self,
+        ui: &mut Ui,
+        rect: Rect,
+        scene: Option<&RenderScene>,
+        extra: &[RenderPiece],
+        reference: bool,
+        res: (u32, u32),
+        view: Mat4,
+        proj: Mat4,
+    ) {
+        let key = (scene.map_or(0, |s| s.generation), extra.len());
+        if let Ok(mut g) = self.gpu_state.lock()
+            && g.key != Some(key)
+        {
+            g.key = Some(key);
+            let (meshes, textures) = gpu_uploads(scene, extra);
+            g.queue(meshes, textures);
+        }
+        // The CPU frame goes stale while the GPU draws; re-render it if we switch back.
+        self.tex.clear();
+        let o = self.effective_opts(reference);
+        let f = |c: [u8; 3]| c.map(|v| v as f32 / 255.0);
+        let params = DrawParams {
+            view,
+            proj,
+            res,
+            reference,
+            snap: o.vertex_snap.then_some(o.snap_size),
+            affine: if o.affine {
+                o.affine_weight.clamp(0.0, 1.0)
+            } else {
+                0.0
+            },
+            dither: o.dither,
+            color15: o.color15,
+            textured: o.textured,
+            cull_back: o.cull_back,
+            fog: o.fog.map(|f| (f.color.map(|v| v as f32), f.start, f.end)),
+            bg_top: f(self.bg_top),
+            bg_bottom: f(self.bg_bottom),
+        };
+        let state = self.gpu_state.clone();
+        let ctx = ui.ctx().clone();
+        let cb = eframe::egui_glow::CallbackFn::new(move |info, painter| {
+            if let Ok(mut g) = state.lock() {
+                g.paint(painter.gl(), &info, painter.intermediate_fbo(), &params);
+                if g.error.is_some() {
+                    // Failures only show up while painting: repaint so the CPU takes over.
+                    ctx.request_repaint();
+                }
+            }
+        });
+        ui.painter_at(rect).add(egui::PaintCallback {
+            rect,
+            callback: std::sync::Arc::new(cb),
+        });
     }
 
     fn handle_input(&mut self, ui: &Ui, r: &Response, controls: Controls, rect: Rect) {
@@ -342,19 +470,95 @@ impl Viewport {
     }
 }
 
-fn draw_call<'a>(p: &'a RenderPiece, textures: &'a [Option<RgbaImage>]) -> DrawCall<'a> {
+fn draw_call<'a>(p: &'a RenderPiece, s: &'a RenderScene, reference: bool) -> DrawCall<'a> {
+    let pbr = p
+        .material
+        .filter(|_| reference)
+        .and_then(|m| s.materials.get(m))
+        .map(psx_forge::raster::PbrMaterial::from_material);
     DrawCall {
         positions: &p.positions,
         uvs: &p.uvs,
-        colors: &p.colors,
+        // PBR applies the material's base colour itself: use the raw vertex colours.
+        colors: if pbr.is_some() {
+            &p.vertex_colors
+        } else {
+            &p.colors
+        },
         indices: &p.indices,
         texture: p
             .texture
-            .and_then(|t| textures.get(t))
+            .and_then(|t| s.textures.get(t))
             .and_then(|t| t.as_ref()),
         id_base: 0,
         double_sided: p.double_sided,
+        normals: &p.normals,
+        pbr,
     }
+}
+
+fn gpu_uploads(
+    scene: Option<&RenderScene>,
+    extra: &[RenderPiece],
+) -> (Vec<MeshUpload>, TextureUpload) {
+    let Some(s) = scene else {
+        return (
+            Vec::new(),
+            TextureUpload {
+                flat: Vec::new(),
+                materials: Vec::new(),
+            },
+        );
+    };
+    let meshes = s
+        .pieces
+        .iter()
+        .chain(extra)
+        .map(|p| {
+            let n = p.positions.len();
+            let mut v = Vec::with_capacity(n * 16);
+            for i in 0..n {
+                let pos = p.positions[i];
+                let uv = p.uvs.get(i).copied().unwrap_or_default();
+                let col = p.colors.get(i).copied().unwrap_or([1.0; 4]);
+                let nrm = p.normals.get(i).copied().unwrap_or_default();
+                let raw = p.vertex_colors.get(i).copied().unwrap_or(col);
+                v.extend_from_slice(&[pos.x, pos.y, pos.z, uv.x, uv.y]);
+                v.extend_from_slice(&col);
+                v.extend_from_slice(&[nrm.x, nrm.y, nrm.z]);
+                v.extend_from_slice(&raw);
+            }
+            MeshUpload {
+                vertices: v,
+                indices: p.indices.clone(),
+                texture: p.texture,
+                material: p.material,
+                double_sided: p.double_sided,
+            }
+        })
+        .collect();
+    let textures = TextureUpload {
+        flat: s.textures.clone(),
+        materials: s
+            .materials
+            .iter()
+            .map(|m| MaterialUpload {
+                base: m.base_color,
+                metallic: m.metallic,
+                roughness: m.roughness,
+                emissive_factor: m.emissive_factor,
+                albedo: m.albedo.clone(),
+                metal_rough: m.metal_rough.clone(),
+                normal: m.normal.clone(),
+                emissive: m.emissive.clone(),
+                ao: m
+                    .ao
+                    .as_ref()
+                    .map(|g| image::DynamicImage::ImageLuma8(g.clone()).to_rgba8()),
+            })
+            .collect(),
+    };
+    (meshes, textures)
 }
 
 /// Small XYZ gizmo in the corner of a viewport.

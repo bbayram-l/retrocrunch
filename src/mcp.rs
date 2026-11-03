@@ -71,7 +71,13 @@ pub fn tools() -> Vec<Value> {
                     "subdivide": {"type": "number", "description": "Split polygons with edges longer than this (world units) to limit affine warping, 0 = off"},
                     "scale": {"type": "number", "description": "Export scale override (Unreal preset uses 100)"},
                     "fbx": {"type": "boolean", "description": "Also write FBX via Blender"},
-                    "preview": {"type": "boolean", "description": "Write a 320x240 preview PNG. Default true"}
+                    "preview": {"type": "boolean", "description": "Write a 320x240 preview PNG. Default true"},
+                    "uv": {"type": "string", "enum": ["atlas", "keep"], "description": "atlas (default): fresh UV atlas, everything rebaked into one texture - no seam smearing at low budgets. keep: original UVs"},
+                    "bake_pieces": {"type": "array", "items": {"type": "string"}, "description": "Piece names (see inspect_model) to remove from the geometry and paint into the texture underneath, e.g. pockets, straps, decals"},
+                    "bake_distance": {"type": "number", "description": "Rebake search distance, % of model size. Default 3; raise if baked detail is missing"},
+                    "chart_angle": {"type": "number", "description": "Atlas chart crease angle in degrees. Default 60"},
+                    "hd_texture": {"type": "boolean", "description": "HD texture: keep the source's texel density and full colour (no palette/dither/15-bit) on the low-poly model - pixel-sharp but high resolution. tex_size and colors are ignored"},
+                    "preset": {"type": "string", "description": "Start from a preset (see list_presets), e.g. 'Hero character', 'Environment prop', 'Survival horror character'. Other arguments you pass override it"}
                 }),
                 texture_props(),
             ),
@@ -86,6 +92,7 @@ pub fn tools() -> Vec<Value> {
                 "yaw_degrees": {"type": "number", "description": "Orbit angle around the model"},
                 "clip": {"type": "string", "description": "Animation clip name or index"},
                 "time": {"type": "number", "description": "Seconds into the clip"},
+                "shading": {"type": "string", "enum": ["ps1", "pbr"], "description": "ps1 (default): PlayStation look. pbr: modern reference render of the source (metal/rough, normal maps, emission) to compare against"},
                 "output": {"type": "string", "description": "Also save the PNG here"}
             }),
             &["input"],
@@ -146,6 +153,12 @@ pub fn tools() -> Vec<Value> {
             &["path"],
         ),
         tool(
+            "list_presets",
+            "List conversion presets: built-in templates for asset types and art styles (characters, environment, props, vehicles, strict PS1, concept-art match, ...) and the user's saved presets. Pass a name as convert_model's `preset`.",
+            json!({}),
+            &[],
+        ),
+        tool(
             "blender_info",
             "Report whether Blender is available for .blend/USD/Alembic import and FBX export.",
             json!({}),
@@ -201,6 +214,7 @@ pub fn call_tool(name: &str, args: &Value) -> Result<Vec<Value>> {
             ops::extract_palette(&str_arg(args, "path")?, colors, save.as_deref())?
         }
         "blender_info" => ops::blender_info(),
+        "list_presets" => ops::list_presets(),
         "blender_convert" => {
             ops::blender_convert(&str_arg(args, "input")?, &str_arg(args, "output")?)?
         }

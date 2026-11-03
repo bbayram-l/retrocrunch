@@ -52,6 +52,9 @@ class PSXForgeSettings(bpy.types.PropertyGroup):
     tex_size: EnumProperty(name="Texture", default="128", items=[(s, f"{s} px", "") for s in ("16", "32", "64", "128", "256", "512", "1024")])
     colors: IntProperty(name="Colours", default=16, min=2, max=256)
     dither: EnumProperty(name="Dither", default="bayer", items=[("bayer", "Bayer 4x4", ""), ("ps1", "PS1 table", ""), ("off", "Off", "")])
+    uv: EnumProperty(name="UV layout", default="atlas", items=[
+        ("atlas", "New atlas", "Unwrap a fresh atlas and rebake everything into one texture"),
+        ("keep", "Keep original", "Keep the source UVs (best for tiling textures)")])
     subdivide: FloatProperty(name="Split polygons over", default=0.0, min=0.0, description="Split edges longer than this (scene units) to limit affine warping. 0 = off")
     remove_hidden: BoolProperty(name="Remove hidden faces", default=True)
     ao: BoolProperty(name="Vertex AO", default=True)
@@ -93,7 +96,8 @@ def export_selection_glb(context, path):
 
 def run_psx_forge(exe, glb, out_dir, s, engine):
     cmd = [exe, "model", glb, "-o", out_dir, "--json", "--tris", str(s.tris), "--tex-size", s.tex_size,
-           "--colors", str(s.colors), "--dither", s.dither, "--engine", engine, "--subdivide", str(s.subdivide)]
+           "--colors", str(s.colors), "--dither", s.dither, "--engine", engine, "--subdivide", str(s.subdivide),
+           "--uv", s.uv]
     if not s.remove_hidden:
         cmd.append("--keep-hidden")
     if not s.ao:
@@ -214,7 +218,7 @@ class PSXFORGE_PT_panel(bpy.types.Panel):
     def draw(self, context):
         s = context.scene.psx_forge
         col = self.layout.column(align=True)
-        for prop in ("tris", "tex_size", "colors", "dither", "subdivide"):
+        for prop in ("tris", "tex_size", "colors", "dither", "uv", "subdivide"):
             col.prop(s, prop)
         col = self.layout.column(align=True)
         col.prop(s, "remove_hidden")

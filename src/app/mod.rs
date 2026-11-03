@@ -1,6 +1,7 @@
 //! psx-forge desktop app shell: tabs, menus, palette library, preferences, drag & drop.
 
 mod blocks_tab;
+mod gpu;
 mod model_tab;
 mod scale_tab;
 mod sprite_tab;
@@ -482,11 +483,13 @@ impl PsxForgeApp {
             }
         }
         self.model.quick_export_window(ctx, &mut self.shared);
+        self.model.preset_window(ctx, &mut self.shared);
     }
 }
 
 impl eframe::App for PsxForgeApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        viewport::GPU_AVAILABLE.store(frame.gl().is_some(), std::sync::atomic::Ordering::Relaxed);
         let theme = (self.prefs.dark, self.prefs.ui_scale);
         if self.applied_theme != Some(theme) {
             widgets::apply_theme(ctx, self.prefs.dark);

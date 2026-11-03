@@ -8,7 +8,7 @@ use super::widgets::{
 use egui::{RichText, Ui};
 use psx_forge::export::{self, EnginePreset, ExportSettings};
 use psx_forge::mesh::Model;
-use psx_forge::process::{self, ConvertSettings, Converted, PieceSettings, TextureSizing};
+use psx_forge::process::{self, ConvertSettings, Converted, PieceSettings, TextureSizing, UvMode};
 use psx_forge::texture::{AlphaMode, DitherMode, PaletteMode, ResizeFilter};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -26,6 +26,15 @@ struct Job {
     progress: Arc<Mutex<(String, f32)>>,
 }
 
+/// State of the "Save preset" window.
+#[derive(Default)]
+struct SavePresetDialog {
+    name: String,
+    category: String,
+    description: String,
+    include_export: bool,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 pub struct ModelTab {
@@ -35,6 +44,12 @@ pub struct ModelTab {
     pub auto_convert: bool,
     pub last_export_dir: Option<PathBuf>,
     pub last_model: Option<PathBuf>,
+    /// Name of the preset last applied (shown with "modified" when settings drift).
+    pub active_preset: Option<String>,
+    #[serde(skip)]
+    presets: Option<Vec<psx_forge::presets::Preset>>,
+    #[serde(skip)]
+    save_preset: Option<SavePresetDialog>,
     #[serde(skip)]
     show_original: bool,
     pub anim_speed: f32,
@@ -108,6 +123,9 @@ impl Default for ModelTab {
             preview_material: 0,
             generation: 1,
             quick_export_open: false,
+            active_preset: None,
+            presets: None,
+            save_preset: None,
             quick_step: 0,
             anim_speed: 1.0,
             anim_clip: None,
@@ -304,10 +322,282 @@ impl ModelTab {
         }
     }
 
+    /// Unload the current asset (settings and presets stay).
+    pub fn clear_asset(&mut self, sh: &mut Shared) {
+        let keep = (
+            std::mem::take(&mut self.settings),
+            std::mem::take(&mut self.export),
+            std::mem::take(&mut self.viewport),
+            self.auto_convert,
+            self.active_preset.take(),
+            self.last_export_dir.take(),
+            self.anim_speed,
+        );
+        *self = ModelTab::default();
+        (
+            self.settings,
+            self.export,
+            self.viewport,
+            self.auto_convert,
+            self.active_preset,
+            self.last_export_dir,
+            self.anim_speed,
+        ) = keep;
+        sh.status = "Cleared the model.".into();
+    }
+
+    /// Back to the built-in default settings (the loaded model stays).
+    pub fn revert_to_defaults(&mut self, sh: &mut Shared) {
+        self.settings = ConvertSettings::default();
+        self.export = EnginePreset::Godot.settings();
+        self.active_preset = None;
+        sh.status = "Settings reverted to defaults.".into();
+    }
+
+    fn all_presets(&mut self, sh: &mut Shared) -> &Vec<psx_forge::presets::Preset> {
+        self.presets.get_or_insert_with(|| {
+            let (user, errors) = psx_forge::presets::load_user();
+            if !errors.is_empty() {
+                sh.error = Some(format!(
+                    "Some presets could not be read:\n{}",
+                    errors.join("\n")
+                ));
+            }
+            psx_forge::presets::builtins()
+                .into_iter()
+                .chain(user)
+                .collect()
+        })
+    }
+
+    fn apply_preset(&mut self, p: &psx_forge::presets::Preset, sh: &mut Shared) {
+        self.settings = p.convert.clone();
+        if let Some(e) = &p.export {
+            self.export = e.clone();
+        }
+        self.active_preset = Some(p.name.clone());
+        sh.status = format!("Preset '{}' applied.", p.name);
+    }
+
+    fn preset_bar(&mut self, ui: &mut Ui, sh: &mut Shared) {
+        let presets = self.all_presets(sh).clone();
+        let active = self.active_preset.clone();
+        let current = active
+            .as_ref()
+            .and_then(|n| presets.iter().find(|p| &p.name == n));
+        let modified = current.is_some_and(|p| {
+            serde_json::to_string(&p.convert).ok() != serde_json::to_string(&self.settings).ok()
+        });
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Preset").color(ACCENT2));
+            let label = match (&active, modified) {
+                (Some(n), true) => format!("{n} (modified)"),
+                (Some(n), false) => n.clone(),
+                (None, _) => "Custom".to_string(),
+            };
+            let mut picked = None;
+            egui::ComboBox::from_id_salt("preset")
+                .selected_text(label)
+                .width(190.0)
+                .show_ui(ui, |ui| {
+                    let mut last = String::new();
+                    for p in &presets {
+                        let cat = if p.builtin {
+                            p.category.clone()
+                        } else {
+                            "My presets".to_string()
+                        };
+                        if cat != last {
+                            ui.label(RichText::new(&cat).small().color(DIM));
+                            last = cat;
+                        }
+                        let resp = ui
+                            .selectable_label(active.as_deref() == Some(p.name.as_str()), &p.name);
+                        let resp = if p.description.is_empty() {
+                            resp
+                        } else {
+                            resp.on_hover_text(&p.description)
+                        };
+                        if resp.clicked() {
+                            picked = Some(p.clone());
+                        }
+                    }
+                });
+            if let Some(p) = picked {
+                self.apply_preset(&p, sh);
+            }
+            ui.menu_button("...", |ui| {
+                if ui.button("Save as preset...").clicked() {
+                    ui.close_menu();
+                    self.save_preset = Some(SavePresetDialog {
+                        name: current
+                            .filter(|p| !p.builtin)
+                            .map(|p| p.name.clone())
+                            .unwrap_or_default(),
+                        category: "My presets".into(),
+                        ..Default::default()
+                    });
+                }
+                if ui.button("Import preset file...").clicked() {
+                    ui.close_menu();
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Preset", &["json"])
+                        .pick_file()
+                    {
+                        match psx_forge::presets::read(&path)
+                            .and_then(|p| psx_forge::presets::save_user(&p).map(|_| p))
+                        {
+                            Ok(p) => {
+                                self.presets = None;
+                                self.apply_preset(&p, sh);
+                            }
+                            Err(e) => sh.error = Some(format!("{e:#}")),
+                        }
+                    }
+                }
+                if ui.button("Export current settings...").clicked() {
+                    ui.close_menu();
+                    let name = active.clone().unwrap_or_else(|| "My preset".into());
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Preset", &["json"])
+                        .set_file_name(format!("{}.json", export::sanitize(&name)))
+                        .save_file()
+                    {
+                        let p = psx_forge::presets::Preset {
+                            name,
+                            category: "My presets".into(),
+                            description: String::new(),
+                            convert: self.settings.clone(),
+                            export: Some(self.export.clone()),
+                            builtin: false,
+                            path: None,
+                        };
+                        match psx_forge::presets::write(&path, &p) {
+                            Ok(()) => sh.status = format!("Preset written to {}", path.display()),
+                            Err(e) => sh.error = Some(format!("{e:#}")),
+                        }
+                    }
+                }
+                let deletable = current.filter(|p| !p.builtin).cloned();
+                if ui
+                    .add_enabled(deletable.is_some(), egui::Button::new("Delete this preset"))
+                    .clicked()
+                {
+                    ui.close_menu();
+                    if let Some(p) = deletable {
+                        match psx_forge::presets::delete_user(&p) {
+                            Ok(()) => {
+                                self.presets = None;
+                                self.active_preset = None;
+                                sh.status = format!("Deleted preset '{}'.", p.name);
+                            }
+                            Err(e) => sh.error = Some(format!("{e:#}")),
+                        }
+                    }
+                }
+                if ui.button("Open presets folder").clicked() {
+                    ui.close_menu();
+                    let dir = psx_forge::presets::user_dir();
+                    let _ = std::fs::create_dir_all(&dir);
+                    let opener = if cfg!(windows) {
+                        "explorer"
+                    } else if cfg!(target_os = "macos") {
+                        "open"
+                    } else {
+                        "xdg-open"
+                    };
+                    let _ = std::process::Command::new(opener).arg(&dir).spawn();
+                }
+                if ui.button("Reload presets").clicked() {
+                    ui.close_menu();
+                    self.presets = None;
+                }
+            });
+        });
+        if let Some(desc) = current
+            .map(|p| p.description.clone())
+            .filter(|d| !d.is_empty())
+        {
+            hint(ui, &desc);
+        }
+    }
+
+    /// "Save preset" window; call once per frame.
+    pub fn preset_window(&mut self, ctx: &egui::Context, sh: &mut Shared) {
+        let Some(d) = &mut self.save_preset else {
+            return;
+        };
+        let mut open = true;
+        let mut save = false;
+        egui::Window::new("Save preset")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Name");
+                    ui.text_edit_singleline(&mut d.name);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Category");
+                    ui.text_edit_singleline(&mut d.category);
+                });
+                ui.label("Description");
+                ui.text_edit_multiline(&mut d.description);
+                ui.checkbox(
+                    &mut d.include_export,
+                    "Include export settings (engine, formats, scale)",
+                );
+                hint(
+                    ui,
+                    &format!("Saved to {}", psx_forge::presets::user_dir().display()),
+                );
+                save = ui
+                    .add_enabled(
+                        !d.name.trim().is_empty(),
+                        egui::Button::new(RichText::new("Save").strong()),
+                    )
+                    .clicked();
+            });
+        if save {
+            let p = psx_forge::presets::Preset {
+                name: d.name.trim().to_string(),
+                category: d.category.trim().to_string(),
+                description: d.description.trim().to_string(),
+                convert: self.settings.clone(),
+                export: d.include_export.then(|| self.export.clone()),
+                builtin: false,
+                path: None,
+            };
+            match psx_forge::presets::save_user(&p) {
+                Ok(path) => {
+                    sh.status = format!("Saved preset '{}' to {}", p.name, path.display());
+                    self.active_preset = Some(p.name);
+                    self.presets = None;
+                    self.save_preset = None;
+                }
+                Err(e) => sh.error = Some(format!("{e:#}")),
+            }
+        } else if !open {
+            self.save_preset = None;
+        }
+    }
+
     pub fn side_panel(&mut self, ui: &mut Ui, sh: &mut Shared) {
         ui.horizontal(|ui| {
             if ui.button("Open model...").clicked() {
                 self.open_dialog(sh);
+            }
+            if ui
+                .add_enabled(
+                    self.source.is_some() && self.job.is_none(),
+                    egui::Button::new("Clear"),
+                )
+                .on_hover_text("Unload the model (settings are kept)")
+                .clicked()
+            {
+                self.clear_asset(sh);
             }
             if self.converted.is_some()
                 && ui
@@ -332,7 +622,19 @@ impl ModelTab {
                 ),
             );
         } else {
-            hint(ui, "OBJ, GLB or glTF. Drag a file onto the window.");
+            hint(
+                ui,
+                "OBJ, GLB/glTF, FBX or .blend. Drag a file onto the window.",
+            );
+        }
+        ui.separator();
+        self.preset_bar(ui, sh);
+        if ui
+            .button("Revert to defaults")
+            .on_hover_text("Reset every conversion and export setting to the built-in defaults")
+            .clicked()
+        {
+            self.revert_to_defaults(sh);
         }
         ui.separator();
         egui::ScrollArea::vertical()
@@ -396,6 +698,17 @@ impl ModelTab {
                             self.pieces[i].enabled = false;
                         }
                     }
+                    if ui
+                        .add_enabled(sel >= 1, egui::Button::new("Bake"))
+                        .on_hover_text("Bake into base texture: remove the selected pieces from the geometry but paint them into the texture underneath (straps, pockets, decals). Uses the UV atlas.")
+                        .clicked()
+                    {
+                        self.push_undo();
+                        for &i in &self.selected {
+                            self.pieces[i].baked = true;
+                            self.pieces[i].enabled = true;
+                        }
+                    }
                     if ui.button("Reset").clicked() {
                         self.push_undo();
                         self.pieces = PieceSettings::defaults_for(&model);
@@ -426,7 +739,9 @@ impl ModelTab {
                                     p.name.clone()
                                 };
                                 let sel = self.selected.contains(&i);
-                                let text = RichText::new(name).color(if before.enabled {
+                                let text = RichText::new(name).color(if before.baked {
+                                    ACCENT2
+                                } else if before.enabled {
                                     ui.visuals().text_color()
                                 } else {
                                     DIM
@@ -449,6 +764,17 @@ impl ModelTab {
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
                                         let s = &mut self.pieces[i];
+                                        if s.baked {
+                                            if ui
+                                                .small_button("Restore")
+                                                .on_hover_text("Bring the piece back as geometry")
+                                                .clicked()
+                                            {
+                                                s.baked = false;
+                                            }
+                                            ui.label(RichText::new("baked").small().color(ACCENT2));
+                                            return;
+                                        }
                                         ui.add(
                                             egui::DragValue::new(&mut s.weight)
                                                 .range(0.0..=10.0)
@@ -732,61 +1058,95 @@ impl ModelTab {
         let s = &mut self.settings;
         section(ui, "Texture", true, |ui| {
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut s.sizing, TextureSizing::Fixed, "Fixed size");
-                ui.selectable_value(&mut s.sizing, TextureSizing::PixelSize, "Pixel size");
+                ui.label("Quality");
+                ui.selectable_value(&mut s.hd_texture, false, "PSX")
+                    .on_hover_text("Crunch to PS1 specs: small texture, CLUT palette, dither, 15-bit colour.");
+                ui.selectable_value(&mut s.hd_texture, true, "HD")
+                    .on_hover_text("Keep the source's texel density and full colour on the low-poly model. Still pixel-sharp (nearest filtering), just high resolution. Size, palette, dither and 15-bit are skipped.");
             });
-            match s.sizing {
-                TextureSizing::Fixed => {
-                    ui.horizontal(|ui| {
-                        egui::ComboBox::from_id_salt("texsize")
-                            .selected_text(format!("{} px", s.texture.max_size))
-                            .show_ui(ui, |ui| {
-                                let mut sizes = SIZES;
-                                sizes.sort();
-                                for v in sizes {
-                                    ui.selectable_value(
-                                        &mut s.texture.max_size,
-                                        v,
-                                        format!("{v} px"),
-                                    );
-                                }
-                            });
-                        ui.label("longest side");
-                    });
+            if s.hd_texture {
+                hint(ui, "HD: source resolution, full colour, nearest filtering.");
+                if let Some(c) = &self.converted {
+                    for (name, w, h, _) in &c.stats.textures {
+                        hint(ui, &format!("{name}: {w}x{h}"));
+                    }
                 }
-                TextureSizing::PixelSize => {
-                    slider_f32(
-                        ui,
-                        "cm per texel",
-                        &mut s.texel_cm,
-                        0.25..=20.0,
-                        2.0,
-                        "Same physical pixel density for every asset in your game",
-                    );
-                    ui.horizontal(|ui| {
-                        ui.label("Model units per metre");
-                        ui.add(
-                            egui::DragValue::new(&mut s.units_per_meter)
-                                .range(0.001..=1000.0)
-                                .speed(0.1),
+            } else {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut s.sizing, TextureSizing::Fixed, "Fixed size");
+                    ui.selectable_value(&mut s.sizing, TextureSizing::PixelSize, "Pixel size");
+                });
+                match s.sizing {
+                    TextureSizing::Fixed => {
+                        ui.horizontal(|ui| {
+                            egui::ComboBox::from_id_salt("texsize")
+                                .selected_text(format!("{} px", s.texture.max_size))
+                                .show_ui(ui, |ui| {
+                                    let mut sizes = SIZES;
+                                    sizes.sort();
+                                    for v in sizes {
+                                        ui.selectable_value(
+                                            &mut s.texture.max_size,
+                                            v,
+                                            format!("{v} px"),
+                                        );
+                                    }
+                                });
+                            ui.label("longest side");
+                        });
+                    }
+                    TextureSizing::PixelSize => {
+                        slider_f32(
+                            ui,
+                            "cm per texel",
+                            &mut s.texel_cm,
+                            0.25..=20.0,
+                            2.0,
+                            "Same physical pixel density for every asset in your game",
                         );
-                    });
-                    if let (Some(c), true) = (&self.converted, true) {
-                        for (name, w, h, _) in &c.stats.textures {
-                            hint(ui, &format!("{name}: {w}x{h}"));
+                        ui.horizontal(|ui| {
+                            ui.label("Model units per metre");
+                            ui.add(
+                                egui::DragValue::new(&mut s.units_per_meter)
+                                    .range(0.001..=1000.0)
+                                    .speed(0.1),
+                            );
+                        });
+                        if let (Some(c), true) = (&self.converted, true) {
+                            for (name, w, h, _) in &c.stats.textures {
+                                hint(ui, &format!("{name}: {w}x{h}"));
+                            }
                         }
                     }
                 }
             }
-            ui.checkbox(&mut s.texture.power_of_two, "Power-of-two sizes");
-            enum_combo(
-                ui,
-                "filter",
-                "downscale",
-                &mut s.texture.filter,
-                &ResizeFilter::ALL,
-                ResizeFilter::label,
-            );
+            ui.horizontal(|ui| {
+                ui.label("UV layout");
+                ui.selectable_value(&mut s.uv_mode, UvMode::Atlas, "New atlas")
+                    .on_hover_text("Unwrap the low-poly mesh into one tight atlas and rebake every material from the full-resolution source. No seam smearing at low budgets; one texture page.");
+                ui.selectable_value(&mut s.uv_mode, UvMode::Keep, "Keep original")
+                    .on_hover_text("Keep the source UVs and resize each material's texture (best for tiling textures).");
+            });
+            if s.uv_mode == UvMode::Atlas || self.pieces.iter().any(|p| p.baked) {
+                ui.indent("atlas", |ui| {
+                    slider_f32(ui, "bake distance %", &mut s.bake_distance, 0.2..=15.0, 3.0, "How far above/below the low-poly surface to look for source detail (% of model size). Raise it if parts come out with the wrong colour, lower it if detail from neighbouring surfaces bleeds in.");
+                    slider_f32(ui, "chart angle", &mut s.chart_angle, 20.0..=85.0, 60.0, "Faces within this angle of a chart's main direction share one UV island: higher = fewer, larger islands.");
+                    if let Some((n, charts)) = self.converted.as_ref().and_then(|c| c.stats.atlas) {
+                        hint(ui, &format!("{n}x{n} atlas, {charts} charts"));
+                    }
+                });
+            }
+            if !s.hd_texture {
+                ui.checkbox(&mut s.texture.power_of_two, "Power-of-two sizes");
+                enum_combo(
+                    ui,
+                    "filter",
+                    "downscale",
+                    &mut s.texture.filter,
+                    &ResizeFilter::ALL,
+                    ResizeFilter::label,
+                );
+            }
             slider_f32(
                 ui,
                 "brightness",
@@ -804,58 +1164,62 @@ impl ModelTab {
                 0.0,
                 "",
             );
-            ui.separator();
-            enum_combo(
-                ui,
-                "palmode",
-                "palette",
-                &mut s.texture.palette_mode,
-                &PaletteMode::ALL,
-                PaletteMode::label,
-            );
-            let imported = matches!(
-                s.texture.palette_mode,
-                PaletteMode::ImportedAll | PaletteMode::ImportedBestN
-            );
-            if imported && sh.palette.is_none() {
-                ui.label(
-                    RichText::new("No palette loaded: using auto. Load one in the Palette panel.")
+            if !s.hd_texture {
+                ui.separator();
+                enum_combo(
+                    ui,
+                    "palmode",
+                    "palette",
+                    &mut s.texture.palette_mode,
+                    &PaletteMode::ALL,
+                    PaletteMode::label,
+                );
+                let imported = matches!(
+                    s.texture.palette_mode,
+                    PaletteMode::ImportedAll | PaletteMode::ImportedBestN
+                );
+                if imported && sh.palette.is_none() {
+                    ui.label(
+                        RichText::new(
+                            "No palette loaded: using auto. Load one in the Palette panel.",
+                        )
                         .color(WARN)
                         .small(),
-                );
-            }
-            if s.texture.palette_mode != PaletteMode::ImportedAll
-                && s.texture.palette_mode != PaletteMode::Rgb555Only
-            {
-                slider_usize(
+                    );
+                }
+                if s.texture.palette_mode != PaletteMode::ImportedAll
+                    && s.texture.palette_mode != PaletteMode::Rgb555Only
+                {
+                    slider_usize(
+                        ui,
+                        "colours",
+                        &mut s.texture.colors,
+                        2..=256,
+                        16,
+                        true,
+                        "Colours per texture (CLUT size: 16 = 4-bit, 256 = 8-bit)",
+                    );
+                }
+                ui.checkbox(&mut s.shared_palette, "One palette for all materials");
+                ui.checkbox(&mut s.texture.rgb555, "Snap to 15-bit RGB555");
+                enum_combo(
                     ui,
-                    "colours",
-                    &mut s.texture.colors,
-                    2..=256,
-                    16,
-                    true,
-                    "Colours per texture (CLUT size: 16 = 4-bit, 256 = 8-bit)",
+                    "dither",
+                    "dither",
+                    &mut s.texture.dither,
+                    &DitherMode::ALL,
+                    DitherMode::label,
                 );
-            }
-            ui.checkbox(&mut s.shared_palette, "One palette for all materials");
-            ui.checkbox(&mut s.texture.rgb555, "Snap to 15-bit RGB555");
-            enum_combo(
-                ui,
-                "dither",
-                "dither",
-                &mut s.texture.dither,
-                &DitherMode::ALL,
-                DitherMode::label,
-            );
-            if s.texture.dither != DitherMode::None {
-                slider_f32(
-                    ui,
-                    "dither amount",
-                    &mut s.texture.dither_amount,
-                    0.0..=64.0,
-                    12.0,
-                    "",
-                );
+                if s.texture.dither != DitherMode::None {
+                    slider_f32(
+                        ui,
+                        "dither amount",
+                        &mut s.texture.dither_amount,
+                        0.0..=64.0,
+                        12.0,
+                        "",
+                    );
+                }
             }
             ui.horizontal(|ui| {
                 ui.label("Alpha");
@@ -1012,16 +1376,27 @@ impl ModelTab {
             0.0
         };
         let avail = ui.available_size();
-        let scene = if self.show_original {
+        let reference = self.show_original || self.scene_out.is_none();
+        let scene = if reference {
             self.scene_src.as_ref()
         } else {
-            self.scene_out.as_ref().or(self.scene_src.as_ref())
+            self.scene_out.as_ref()
         };
         let info = ui
             .allocate_ui(egui::vec2(avail.x, (avail.y - tex_h).max(100.0)), |ui| {
-                self.viewport.show(ui, scene, Controls::Viewer, &[])
+                self.viewport
+                    .show(ui, scene, Controls::Viewer, &[], reference)
             })
             .inner;
+        if reference {
+            ui.painter_at(info.rect).text(
+                info.rect.right_top() + egui::vec2(-8.0, 8.0),
+                egui::Align2::RIGHT_TOP,
+                "Original: PBR reference (PS1 effects apply to the PSX view)",
+                egui::FontId::proportional(12.0),
+                DIM,
+            );
+        }
         axis_gizmo(ui, &info);
         if let Some(c) = &self.converted {
             let painter = ui.painter_at(info.rect);
