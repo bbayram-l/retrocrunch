@@ -170,11 +170,11 @@ fn run(exe: &Path, input: &Path, output: &Path) -> Result<()> {
         .unwrap_or("")
         .to_ascii_lowercase();
     let mut cmd = Command::new(exe);
-    cmd.arg("-b");
+    // Untrusted files: no user preferences/add-ons and no auto-run of Python scripts
+    // embedded in .blend files (drivers, registered text blocks).
+    cmd.args(["-b", "--factory-startup", "--disable-autoexec"]);
     if ext == "blend" {
         cmd.arg(input);
-    } else {
-        cmd.arg("--factory-startup");
     }
     cmd.args(["--python-exit-code", "1", "--python-expr", SCRIPT, "--"])
         .arg(input)

@@ -37,17 +37,13 @@ fn load_texture(tex: &ufbx::Texture, dir: &Path) -> Option<RgbaImage> {
         tex.relative_filename.as_ref(),
         tex.filename.as_ref(),
     ];
+    // FBX files often carry the author's absolute paths: only look inside the model's
+    // folder (and its textures/ sub-folder), never at the path as written.
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
     for n in names.iter().filter(|n| !n.is_empty()) {
-        let p = Path::new(n);
-        candidates.push(if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            dir.join(p)
-        });
-        if let Some(file) = p.file_name() {
-            candidates.push(dir.join(file));
-            candidates.push(dir.join("textures").join(file));
+        candidates.extend(crate::mesh::safe_local_path(dir, n));
+        if let Some(file) = Path::new(n).file_name().and_then(|f| f.to_str()) {
+            candidates.extend(crate::mesh::safe_local_path(&dir.join("textures"), file));
         }
     }
     candidates

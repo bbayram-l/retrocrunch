@@ -58,7 +58,14 @@ enum Cmd {
         action: BlenderCmd,
     },
     /// Run as an MCP server on stdio for coding agents.
-    Mcp,
+    Mcp {
+        /// Workspace folder tool paths must stay inside (default: current directory).
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Allow tool paths anywhere on disk.
+        #[arg(long, conflicts_with = "root")]
+        allow_any_path: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -375,7 +382,17 @@ fn main() -> Result<()> {
     };
     let report = match cli.cmd {
         None => return run_gui(cli.file),
-        Some(Cmd::Mcp) => return psx_forge::mcp::serve(),
+        Some(Cmd::Mcp {
+            root,
+            allow_any_path,
+        }) => {
+            let root = if allow_any_path {
+                None
+            } else {
+                Some(root.map_or_else(std::env::current_dir, Ok)?)
+            };
+            return psx_forge::mcp::serve(root);
+        }
         Some(Cmd::Model(a)) => {
             let engine = a.engine.name();
             let o = ModelOptions {

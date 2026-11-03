@@ -9,6 +9,7 @@ use anyhow::{Context, Result, anyhow};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::io::{BufRead, Write};
+use std::path::{Path, PathBuf};
 
 const PROTOCOL: &str = "2025-06-18";
 const SUPPORTED: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -209,7 +210,82 @@ pub fn call_tool(name: &str, args: &Value) -> Result<Vec<Value>> {
 }
 
 /// Handle one JSON-RPC message; `None` for notifications.
-pub fn handle(msg: &Value) -> Option<Value> {
+/// Argument keys that carry file paths (strings or arrays of strings).
+const PATH_KEYS: &[&str] = &[
+    "input",
+    "inputs",
+    "output",
+    "output_dir",
+    "path",
+    "save",
+    "palette",
+    "project",
+    "atlas",
+    "save_project",
+];
+
+/// Resolve `p` (relative to the current directory) without requiring it to exist:
+/// canonicalise the longest existing ancestor and re-append the rest.
+fn resolve(p: &Path) -> Result<PathBuf> {
+    use std::path::Component;
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(p)
+    };
+    let mut existing = abs.clone();
+    let mut rest: Vec<std::ffi::OsString> = Vec::new();
+    while !existing.exists() {
+        match (existing.file_name(), existing.parent()) {
+            (Some(f), Some(parent)) => {
+                rest.push(f.to_os_string());
+                existing = parent.to_path_buf();
+            }
+            _ => break,
+        }
+    }
+    let mut out = existing.canonicalize().unwrap_or(existing);
+    for part in rest.iter().rev() {
+        out.push(part);
+    }
+    if out.components().any(|c| c == Component::ParentDir) {
+        anyhow::bail!(
+            "path '{}' uses '..' outside an existing folder",
+            p.display()
+        );
+    }
+    Ok(out)
+}
+
+/// Every path argument must stay inside the workspace `root`, so a confused or
+/// prompt-injected agent can't read or overwrite files elsewhere through this server.
+pub fn check_paths(args: &Value, root: &Path) -> Result<()> {
+    let shown = root.display().to_string();
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("workspace root {shown}"))?;
+    let mut values: Vec<&str> = Vec::new();
+    for key in PATH_KEYS {
+        match args.get(*key) {
+            Some(Value::String(s)) => values.push(s),
+            Some(Value::Array(a)) => values.extend(a.iter().filter_map(Value::as_str)),
+            _ => {}
+        }
+    }
+    for v in values {
+        let r = resolve(Path::new(v))?;
+        if !r.starts_with(&root) {
+            anyhow::bail!(
+                "path '{v}' is outside the workspace {} (start the server with --root <dir> or --allow-any-path)",
+                shown
+            );
+        }
+    }
+    Ok(())
+}
+
+/// `root`: confine tool paths to this folder (None = unrestricted).
+pub fn handle(msg: &Value, root: Option<&Path>) -> Option<Value> {
     let id = msg.get("id").cloned();
     let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
     let id = id?; // notifications (no id) never get a response
@@ -247,7 +323,11 @@ pub fn handle(msg: &Value) -> Option<Value> {
                 .cloned()
                 .unwrap_or(json!({}));
             // Tool failures are results with isError, so the agent can read and recover.
-            match call_tool(name, &args) {
+            let result = match root {
+                Some(r) => check_paths(&args, r).and_then(|()| call_tool(name, &args)),
+                None => call_tool(name, &args),
+            };
+            match result {
                 Ok(content) => ok(json!({"content": content, "isError": false})),
                 Err(e) => ok(
                     json!({"content": [{"type": "text", "text": format!("{e:#}")}], "isError": true}),
@@ -261,7 +341,15 @@ pub fn handle(msg: &Value) -> Option<Value> {
 }
 
 /// Blocking stdio loop.
-pub fn serve() -> Result<()> {
+/// Blocking stdio loop. Relative paths resolve against `root` (the working directory).
+pub fn serve(root: Option<PathBuf>) -> Result<()> {
+    if let Some(r) = &root {
+        std::env::set_current_dir(r)
+            .with_context(|| format!("entering workspace {}", r.display()))?;
+        eprintln!("psx-forge mcp: workspace {}", r.display());
+    } else {
+        eprintln!("psx-forge mcp: unrestricted paths (--allow-any-path)");
+    }
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout().lock();
     for line in stdin.lock().lines() {
@@ -270,7 +358,7 @@ pub fn serve() -> Result<()> {
             continue;
         }
         let reply = match serde_json::from_str::<Value>(&line) {
-            Ok(msg) => handle(&msg),
+            Ok(msg) => handle(&msg, root.as_deref()),
             Err(e) => Some(
                 json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": format!("parse error: {e}")}}),
             ),
@@ -311,6 +399,37 @@ pub fn base64(data: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    fn handle_any(msg: &Value) -> Option<Value> {
+        handle(msg, None)
+    }
+
+    #[test]
+    fn workspace_root_rejects_outside_paths() {
+        let root = std::env::temp_dir().join("psxforge_root_test");
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        let inside = root.join("assets").join("new").join("out.glb");
+        assert!(check_paths(&json!({"output": inside.display().to_string()}), &root).is_ok());
+        let outside = std::env::temp_dir().join("elsewhere.glb");
+        assert!(
+            check_paths(
+                &json!({"inputs": [inside.display().to_string(), outside.display().to_string()]}),
+                &root
+            )
+            .is_err()
+        );
+        let sneaky = root.join("assets").join("..").join("..").join("x.glb");
+        assert!(check_paths(&json!({"output_dir": sneaky.display().to_string()}), &root).is_err());
+        let msg = json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "inspect_model", "arguments": {"path": outside.display().to_string()}}});
+        let r = handle(&msg, Some(&root)).unwrap();
+        assert_eq!(r["result"]["isError"], true);
+        assert!(
+            r["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("outside the workspace")
+        );
+    }
+
     #[test]
     fn base64_matches_rfc4648_vectors() {
         for (i, o) in [
@@ -326,12 +445,12 @@ mod tests {
 
     #[test]
     fn initialize_list_and_errors() {
-        let init = handle(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05"}})).unwrap();
+        let init = handle_any(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05"}})).unwrap();
         assert_eq!(init["result"]["protocolVersion"], "2024-11-05");
         assert!(
-            handle(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"})).is_none()
+            handle_any(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"})).is_none()
         );
-        let list = handle(&json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})).unwrap();
+        let list = handle_any(&json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})).unwrap();
         let names: Vec<&str> = list["result"]["tools"]
             .as_array()
             .unwrap()
@@ -339,9 +458,9 @@ mod tests {
             .map(|t| t["name"].as_str().unwrap())
             .collect();
         assert!(names.contains(&"convert_model") && names.contains(&"render_preview"));
-        let bad = handle(&json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "inspect_model", "arguments": {"path": "nope.glb"}}})).unwrap();
+        let bad = handle_any(&json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "inspect_model", "arguments": {"path": "nope.glb"}}})).unwrap();
         assert_eq!(bad["result"]["isError"], true);
-        let unknown = handle(&json!({"jsonrpc": "2.0", "id": 4, "method": "nope"})).unwrap();
+        let unknown = handle_any(&json!({"jsonrpc": "2.0", "id": 4, "method": "nope"})).unwrap();
         assert_eq!(unknown["error"]["code"], -32601);
     }
 

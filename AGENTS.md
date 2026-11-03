@@ -78,7 +78,9 @@ The saved project opens in the GUI's Blocks tab for hand editing.
 
 ## Conventions
 
-- Paths are local file paths; outputs go to `output_dir` (default `psx_out`).
+- Paths are local file paths; outputs go to `output_dir` (default `psx_out`). Every path
+  must be inside the server's workspace (its working directory, or `--root`). Paths
+  outside it fail with an `isError` result.
 - Tool errors return `isError: true` with a readable message. Fix the arguments and
   retry instead of giving up.
 - With `--json`, stdout holds only the JSON report; progress goes to stderr.

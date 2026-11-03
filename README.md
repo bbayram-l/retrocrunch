@@ -87,6 +87,12 @@ args = ["mcp"]
 
 Tools: `inspect_model`, `convert_model`, `render_preview` (returns the PS1-style render as an image, so the agent can look at its result), `crunch_texture`, `sprite_maps`, `scale_pixel_art`, `build_blocks` (author levels from JSON boxes and cells), `extract_palette`, `blender_info` and `blender_convert`. Failures come back as `isError` results the agent can read and act on. See `AGENTS.md` for the recommended loop.
 
+All tool paths must stay inside a workspace folder: the server's working directory by default, or `--root <dir>`. Use `--allow-any-path` to lift the restriction.
+
+### Untrusted files
+
+Model files are treated as untrusted. Textures, MTL files and glTF buffers referenced from inside a model are only looked up in the model's own folder (absolute, UNC and `..` references are reduced to the file name). glTF files pointing outside their folder are refused. Blender always runs with `--factory-startup --disable-autoexec`, so Python embedded in a `.blend` never runs.
+
 ## Godot 4 workflow
 
 The Godot preset writes `name.glb`, `name.png` (indexed, nearest), `psx_lit.gdshader` and `name.tscn`.

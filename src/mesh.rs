@@ -391,6 +391,93 @@ fn load_via_blender(path: &Path) -> Result<Model> {
     model
 }
 
+/// Resolve a file name referenced *inside* a model file (texture, MTL, buffer) against
+/// the model's folder. Absolute, drive-relative, UNC (`\\host\share`), URI and `..`
+/// references are never followed as given: only their file name is looked up in `dir`.
+/// Following them would let a crafted file read arbitrary paths or, on Windows, make
+/// SMB connections that leak NTLM credentials.
+pub(crate) fn safe_local_path(dir: &Path, name: &str) -> Option<PathBuf> {
+    use std::path::Component;
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let p = Path::new(name);
+    let unsafe_ref = name.contains("://")
+        || name.starts_with("\\\\")
+        || name.starts_with("//")
+        || p.components().any(|c| {
+            matches!(
+                c,
+                Component::Prefix(_) | Component::RootDir | Component::ParentDir
+            )
+        });
+    let rel = if unsafe_ref {
+        PathBuf::from(p.file_name()?)
+    } else {
+        p.to_path_buf()
+    };
+    let full = dir.join(rel);
+    // Symlinks must not lead outside the folder either.
+    if let (Ok(c), Ok(d)) = (full.canonicalize(), dir.canonicalize())
+        && !c.starts_with(&d)
+    {
+        return None;
+    }
+    Some(full)
+}
+
+/// Reject glTF files whose buffers/images point outside their folder (absolute paths,
+/// UNC shares, other URI schemes, `..`). Embedded `data:` URIs and plain relative names are fine.
+fn check_gltf_uris(path: &Path) -> Result<()> {
+    let gltf = gltf::Gltf::open(path).with_context(|| format!("loading {}", path.display()))?;
+    let uris = gltf
+        .buffers()
+        .filter_map(|b| match b.source() {
+            gltf::buffer::Source::Uri(u) => Some(u.to_string()),
+            gltf::buffer::Source::Bin => None,
+        })
+        .chain(gltf.images().filter_map(|i| match i.source() {
+            gltf::image::Source::Uri { uri, .. } => Some(uri.to_string()),
+            gltf::image::Source::View { .. } => None,
+        }));
+    for uri in uris {
+        if uri.starts_with("data:") {
+            continue;
+        }
+        let decoded = percent_decode(&uri);
+        let dir = path.parent().unwrap_or(Path::new("."));
+        let safe = safe_local_path(dir, &decoded).is_some_and(|p| p == dir.join(&decoded))
+            && !decoded.contains(':');
+        if !safe {
+            bail!(
+                "{} references '{uri}' outside its folder; refusing to follow it",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16)
+        {
+            out.push(v);
+            i += 3;
+            continue;
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn load_image_rgba(path: &Path) -> Option<RgbaImage> {
     match image::open(path) {
         Ok(i) => Some(i.to_rgba8()),
@@ -407,9 +494,15 @@ fn load_obj(path: &Path) -> Result<Model> {
         single_index: true,
         ..Default::default()
     };
-    let (models, mats) =
-        tobj::load_obj(path, &opts).with_context(|| format!("loading {}", path.display()))?;
     let dir = path.parent().unwrap_or(Path::new("."));
+    // mtllib paths come from the file: resolve them only inside the model's folder.
+    let file = std::fs::File::open(path).with_context(|| format!("loading {}", path.display()))?;
+    let (models, mats) = tobj::load_obj_buf(&mut std::io::BufReader::new(file), &opts, |mtl| {
+        let p =
+            safe_local_path(dir, &mtl.to_string_lossy()).ok_or(tobj::LoadError::OpenFileFailed)?;
+        tobj::load_mtl(p)
+    })
+    .with_context(|| format!("loading {}", path.display()))?;
     let mats = mats.unwrap_or_else(|e| {
         eprintln!("warning: MTL not loaded: {e}");
         Vec::new()
@@ -417,7 +510,7 @@ fn load_obj(path: &Path) -> Result<Model> {
     let tex_path = |s: &str| -> PathBuf {
         // Strip MTL options like "-bm 1.0 file.png": keep the last token.
         let file = s.split_whitespace().last().unwrap_or(s);
-        dir.join(file)
+        safe_local_path(dir, file).unwrap_or_else(|| dir.join("__invalid__"))
     };
     let materials = mats
         .iter()
@@ -534,6 +627,7 @@ fn gltf_image_to_rgba(img: &gltf::image::Data) -> Option<RgbaImage> {
 }
 
 fn load_gltf(path: &Path) -> Result<Model> {
+    check_gltf_uris(path)?;
     let (doc, buffers, images) =
         gltf::import(path).with_context(|| format!("loading {}", path.display()))?;
     let tex = |t: Option<gltf::texture::Texture>| {
@@ -1134,6 +1228,75 @@ pub(crate) mod tests {
         let mut q = quad(1.0);
         q.subdivide(1.5 / 4.0, 5);
         assert!(q.tri_count() < 32, "triangle cap stops refinement");
+    }
+
+    #[test]
+    fn file_references_never_leave_the_model_folder() {
+        let dir = std::env::temp_dir().join("psxforge_safe_paths");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(
+            safe_local_path(&dir, "tex.png").unwrap(),
+            dir.join("tex.png")
+        );
+        assert_eq!(
+            safe_local_path(&dir, "sub/tex.png").unwrap(),
+            dir.join("sub/tex.png")
+        );
+        // Absolute, UNC, drive-relative and parent references collapse to the file name.
+        for evil in [
+            "C:\\Users\\victim\\tex.png",
+            "\\\\attacker\\share\\tex.png",
+            "//attacker/share/tex.png",
+            "/etc/tex.png",
+            "../../tex.png",
+            "C:tex.png",
+            "file://host/tex.png",
+        ] {
+            assert_eq!(
+                safe_local_path(&dir, evil).unwrap(),
+                dir.join("tex.png"),
+                "{evil}"
+            );
+        }
+        assert!(safe_local_path(&dir, "").is_none());
+    }
+
+    #[test]
+    fn gltf_with_external_absolute_uri_is_rejected() {
+        let dir = std::env::temp_dir().join("psxforge_gltf_uri");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("evil.gltf");
+        std::fs::write(&p, r#"{"asset":{"version":"2.0"},"buffers":[{"uri":"\\\\attacker\\share\\b.bin","byteLength":4}]}"#).unwrap();
+        let err = Model::load(&p).unwrap_err().to_string();
+        assert!(err.contains("outside its folder"), "{err}");
+        std::fs::write(
+            &p,
+            r#"{"asset":{"version":"2.0"},"buffers":[{"uri":"..%2F..%2Fb.bin","byteLength":4}]}"#,
+        )
+        .unwrap();
+        assert!(
+            Model::load(&p)
+                .unwrap_err()
+                .to_string()
+                .contains("outside its folder")
+        );
+    }
+
+    #[test]
+    fn obj_mtllib_outside_folder_is_not_followed() {
+        let root = std::env::temp_dir().join("psxforge_obj_mtl");
+        let dir = root.join("model");
+        std::fs::create_dir_all(&dir).unwrap();
+        // A real MTL sits one folder up; the OBJ asks for it with "..".
+        std::fs::write(root.join("outside.mtl"), "newmtl leaked\nKd 1 0 0\n").unwrap();
+        let p = dir.join("m.obj");
+        std::fs::write(
+            &p,
+            "mtllib ../outside.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl leaked\nf 1 2 3\n",
+        )
+        .unwrap();
+        let m = Model::load(&p).unwrap();
+        assert!(m.materials.iter().all(|m| m.name != "leaked"));
     }
 
     #[test]
