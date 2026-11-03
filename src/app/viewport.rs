@@ -530,7 +530,14 @@ fn gpu_uploads(
             }
             MeshUpload {
                 vertices: v,
-                indices: p.indices.clone(),
+                // Never let the GPU read past the vertex buffer.
+                indices: p
+                    .indices
+                    .chunks_exact(3)
+                    .filter(|t| t.iter().all(|&i| (i as usize) < n))
+                    .flatten()
+                    .copied()
+                    .collect(),
                 texture: p.texture,
                 material: p.material,
                 double_sided: p.double_sided,

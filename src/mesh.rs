@@ -90,6 +90,21 @@ impl Morph {
 }
 
 impl Piece {
+    /// Remove triangles that reference vertices past the end of `vertices`.
+    pub fn drop_invalid_triangles(&mut self) {
+        let n = self.vertices.len();
+        if self.indices.iter().all(|&i| (i as usize) < n) && self.indices.len() % 3 == 0 {
+            return;
+        }
+        self.indices = self
+            .indices
+            .chunks_exact(3)
+            .filter(|t| t.iter().all(|&i| (i as usize) < n))
+            .flatten()
+            .copied()
+            .collect();
+    }
+
     pub fn tri_count(&self) -> usize {
         self.indices.len() / 3
     }
@@ -385,6 +400,11 @@ impl Model {
             .and_then(|s| s.to_str())
             .unwrap_or("model")
             .to_string();
+        // Untrusted files: drop triangles whose indices point past the vertex array, so
+        // no consumer (CPU raster, GPU buffers, exporters) reads out of bounds.
+        for p in &mut model.pieces {
+            p.drop_invalid_triangles();
+        }
         model.pieces.retain(|p| !p.indices.is_empty());
         if model.pieces.is_empty() {
             bail!("{} contains no triangles", path.display());
@@ -1149,6 +1169,17 @@ pub(crate) mod tests {
             skin: None,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn invalid_indices_are_dropped_with_their_triangle() {
+        let mut p = uv_sphere(4);
+        let n = p.vertices.len() as u32;
+        let good = p.indices.len();
+        p.indices.extend_from_slice(&[0, 1, n + 7, 2]);
+        p.drop_invalid_triangles();
+        assert_eq!(p.indices.len(), good);
+        assert!(p.indices.iter().all(|&i| i < n));
     }
 
     #[test]

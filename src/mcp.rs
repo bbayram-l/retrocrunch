@@ -286,6 +286,12 @@ pub fn check_paths(args: &Value, root: &Path) -> Result<()> {
             _ => {}
         }
     }
+    // `preset` is a name unless it's a .json file, which must then be inside the root too.
+    if let Some(Value::String(s)) = args.get("preset")
+        && s.to_ascii_lowercase().ends_with(".json")
+    {
+        values.push(s);
+    }
     for v in values {
         let r = resolve(Path::new(v))?;
         if !r.starts_with(&root) {
@@ -431,6 +437,16 @@ mod tests {
             )
             .is_err()
         );
+        let outside_preset = std::env::temp_dir().join("evil_preset.json");
+        assert!(
+            check_paths(
+                &json!({"preset": outside_preset.display().to_string()}),
+                &root
+            )
+            .is_err(),
+            "preset files outside the workspace are rejected"
+        );
+        assert!(check_paths(&json!({"preset": "Hero character"}), &root).is_ok());
         let sneaky = root.join("assets").join("..").join("..").join("x.glb");
         assert!(check_paths(&json!({"output_dir": sneaky.display().to_string()}), &root).is_err());
         let msg = json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "inspect_model", "arguments": {"path": outside.display().to_string()}}});
