@@ -1,4 +1,4 @@
-//! psx-forge desktop app shell: tabs, menus, palette library, preferences, drag & drop.
+//! retrocrunch desktop app shell: tabs, menus, palette library, preferences, drag & drop.
 
 mod blocks_tab;
 mod detail_panel;
@@ -13,7 +13,7 @@ mod viewport;
 mod widgets;
 
 use egui::{Key, KeyboardShortcut, Modifiers, RichText};
-use psx_forge::palette::{self, Rgb};
+use retrocrunch::palette::{self, Rgb};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use widgets::{ACCENT, ACCENT2, DIM, WARN};
@@ -88,7 +88,7 @@ struct Persisted {
     blocks: blocks_tab::BlocksTab,
 }
 
-pub struct PsxForgeApp {
+pub struct RetrocrunchApp {
     tab: Tab,
     prefs: Prefs,
     shared: Shared,
@@ -105,9 +105,9 @@ pub struct PsxForgeApp {
     palette_lib: palette_library::PaletteLibrary,
 }
 
-const STORAGE_KEY: &str = "psx-forge-state";
+const STORAGE_KEY: &str = "retrocrunch-state";
 
-impl PsxForgeApp {
+impl RetrocrunchApp {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Option<PathBuf>) -> Self {
         let p: Persisted = cc
             .storage
@@ -128,7 +128,7 @@ impl PsxForgeApp {
             show_prefs: false,
             show_about: false,
             applied_theme: None,
-            blender: psx_forge::blender::find_blender().map(|p| p.display().to_string()),
+            blender: retrocrunch::blender::find_blender().map(|p| p.display().to_string()),
             palette_lib: Default::default(),
         };
         if let Some(pp) = app.prefs.palette_path.clone() {
@@ -145,8 +145,8 @@ impl PsxForgeApp {
             Ok(colors) => {
                 let builtin = p
                     .to_str()
-                    .and_then(|s| s.strip_prefix(psx_forge::lospec::BUILTIN_PREFIX))
-                    .and_then(psx_forge::lospec::builtin);
+                    .and_then(|s| s.strip_prefix(retrocrunch::lospec::BUILTIN_PREFIX))
+                    .and_then(retrocrunch::lospec::builtin);
                 let name = match builtin {
                     Some(b) => b.name,
                     None => p
@@ -180,7 +180,7 @@ impl PsxForgeApp {
         let sh = &mut self.shared;
         match ext.as_str() {
             e if ["obj", "glb", "gltf", "fbx"].contains(&e)
-                || psx_forge::blender::IMPORT_EXTS.contains(&e) =>
+                || retrocrunch::blender::IMPORT_EXTS.contains(&e) =>
             {
                 self.tab = Tab::Model;
                 self.model.load(p, sh);
@@ -270,14 +270,14 @@ impl PsxForgeApp {
                 ui.checkbox(&mut self.prefs.dark, "Dark theme");
             });
             ui.menu_button("Help", |ui| {
-                if ui.button("About psx-forge").clicked() {
+                if ui.button("About retrocrunch").clicked() {
                     ui.close_menu();
                     self.show_about = true;
                 }
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
-                    RichText::new("PSX-FORGE")
+                    RichText::new("RETROCRUNCH")
                         .strong()
                         .color(ACCENT)
                         .monospace(),
@@ -326,7 +326,7 @@ impl PsxForgeApp {
     /// A palette the user just chose should change the colours: switch Model and Texture
     /// to "imported: all colours" (the auto modes build their own palette).
     fn use_loaded_palette(&mut self) {
-        use psx_forge::texture::PaletteMode;
+        use retrocrunch::texture::PaletteMode;
         let Some(p) = &self.shared.palette else {
             return;
         };
@@ -391,8 +391,8 @@ impl PsxForgeApp {
                 }
                 let unused = !matches!(
                     self.model.settings.texture.palette_mode,
-                    psx_forge::texture::PaletteMode::ImportedAll
-                        | psx_forge::texture::PaletteMode::ImportedBestN
+                    retrocrunch::texture::PaletteMode::ImportedAll
+                        | retrocrunch::texture::PaletteMode::ImportedBestN
                 );
                 if unused
                     && ui
@@ -494,7 +494,7 @@ impl PsxForgeApp {
                         }
                         None => {
                             ui.label(RichText::new("Blender not found").color(WARN));
-                            widgets::hint(ui, "Needed for .blend/USD/Alembic import and FBX export. Install Blender or set PSXFORGE_BLENDER.");
+                            widgets::hint(ui, "Needed for .blend/USD/Alembic import and FBX export. Install Blender or set RETROCRUNCH_BLENDER.");
                         }
                     }
                     if ui.button("Reset all tab settings").clicked() {
@@ -513,14 +513,14 @@ impl PsxForgeApp {
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
-                    ui.label(RichText::new("psx-forge").heading().color(ACCENT));
+                    ui.label(RichText::new("Retrocrunch").heading().color(ACCENT));
                     ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
                     ui.label("A local, free PS1-style asset pipeline:");
                     for (_, name, tip) in Tab::ALL {
                         ui.label(format!("  {name}: {tip}"));
                     }
                     ui.label(
-                        RichText::new("Also usable from the command line: psx-forge --help")
+                        RichText::new("Also usable from the command line: retrocrunch --help")
                             .color(DIM),
                     );
                 });
@@ -568,7 +568,7 @@ impl PsxForgeApp {
     }
 }
 
-impl eframe::App for PsxForgeApp {
+impl eframe::App for RetrocrunchApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         viewport::GPU_AVAILABLE.store(frame.gl().is_some(), std::sync::atomic::Ordering::Relaxed);
         let theme = (self.prefs.dark, self.prefs.ui_scale);

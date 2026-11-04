@@ -1,4 +1,4 @@
-//! Model Context Protocol server (`psx-forge mcp`): JSON-RPC 2.0 over stdio, one message
+//! Model Context Protocol server (`retrocrunch mcp`): JSON-RPC 2.0 over stdio, one message
 //! per line. Exposes the `ops` operations as tools so coding agents (Claude Code, Codex,
 //! Cursor, ...) can convert assets, inspect results and *see* PS1-style previews.
 //!
@@ -444,7 +444,7 @@ pub fn handle(msg: &Value, root: Option<&Path>) -> Option<Value> {
             ok(json!({
                 "protocolVersion": version,
                 "capabilities": {"tools": {"listChanged": false}},
-                "serverInfo": {"name": "psx-forge", "version": env!("CARGO_PKG_VERSION")},
+                "serverInfo": {"name": "retrocrunch", "version": env!("CARGO_PKG_VERSION")},
                 "instructions": "PS1-style asset pipeline. Typical flow: inspect_model -> convert_model -> render_preview (look at the image) -> adjust tris/colors/subdivide and repeat. Paths are local file paths.",
             }))
         }
@@ -483,9 +483,9 @@ pub fn serve(root: Option<PathBuf>) -> Result<()> {
     if let Some(r) = &root {
         std::env::set_current_dir(r)
             .with_context(|| format!("entering workspace {}", r.display()))?;
-        eprintln!("psx-forge mcp: workspace {}", r.display());
+        eprintln!("retrocrunch mcp: workspace {}", r.display());
     } else {
-        eprintln!("psx-forge mcp: unrestricted paths (--allow-any-path)");
+        eprintln!("retrocrunch mcp: unrestricted paths (--allow-any-path)");
     }
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout().lock();
@@ -552,7 +552,7 @@ mod tests {
 
     #[test]
     fn workspace_root_rejects_outside_paths() {
-        let root = std::env::temp_dir().join("psxforge_root_test");
+        let root = std::env::temp_dir().join("retrocrunch_root_test");
         std::fs::create_dir_all(root.join("assets")).unwrap();
         let inside = root.join("assets").join("new").join("out.glb");
         assert!(check_paths(&json!({"output": inside.display().to_string()}), &root).is_ok());
@@ -630,7 +630,7 @@ mod tests {
 
     #[test]
     fn build_blocks_and_preview_through_tools() {
-        let dir = std::env::temp_dir().join("psxforge_mcp_test");
+        let dir = std::env::temp_dir().join("retrocrunch_mcp_test");
         let _ = std::fs::remove_dir_all(&dir);
         let args = json!({
             "boxes": [{"from": [0, 0, 0], "to": [3, 0, 3]}],

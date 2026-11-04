@@ -5,7 +5,7 @@ use super::texture_tab::{IMAGE_EXTS, batch_images};
 use super::widgets::{self, DIM, ImageView, TexSlot, hint, section};
 use egui::{RichText, Ui};
 use image::RgbaImage;
-use psx_forge::scale::{self, Scaler};
+use retrocrunch::scale::{self, Scaler};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 

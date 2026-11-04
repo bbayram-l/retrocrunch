@@ -1,12 +1,27 @@
 # Changelog
 
-All notable changes to psx-forge. The format follows
+All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (see "Versioning" in the README).
 
 ## [Unreleased]
 
+### Added
+- Licence: PolyForm Shield 1.0.0 (source-available; use Retrocrunch for anything,
+  including commercial games, but don't sell or redistribute it). Converted output is
+  yours; `godot/` and `blender/` are MIT No Attribution. Contribution terms in
+  `CONTRIBUTING.md`, third-party notices in `THIRD_PARTY_LICENSES.html`.
+
 ### Changed
+- **Renamed psx-forge to Retrocrunch** (PSX is a Sony trademark). The program is now
+  `retrocrunch` (`retrocrunch.exe`), the crate `retrocrunch`, the MCP server `retrocrunch`,
+  the Blender add-on `retrocrunch_addon.py`, and the environment variables
+  `RETROCRUNCH_BLENDER`, `RETROCRUNCH_PRESETS` and `RETROCRUNCH_PALETTES`. The settings
+  folder `%APPDATA%\psx-forge` (presets, palettes, window state) is moved to
+  `%APPDATA%\retrocrunch` on first start. Godot shader and script names (`psx_*`) are
+  unchanged.
+- New README with art rendered by Retrocrunch itself (`tools/readme-art/` rebuilds it);
+  the full reference moved to `docs/GUIDE.md`.
 - Internal clean-up, no behaviour change (41 reference outputs byte-identical):
   `export`, `mesh` and the Model tab are split into focused modules, one copy of the
   sRGB transfer curve is shared by the rasterizer, palettes and CRT pass, and the

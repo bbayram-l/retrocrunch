@@ -1,19 +1,19 @@
-# psx-forge Blender add-on: PS1-ify the selected objects without leaving Blender.
+# retrocrunch Blender add-on: PS1-ify the selected objects without leaving Blender.
 #
 # Install: Edit > Preferences > Add-ons > Install from Disk... > pick this file.
-# Then: 3D Viewport > Sidebar (N) > "PSX Forge".
+# Then: 3D Viewport > Sidebar (N) > "Retrocrunch".
 #
 # Exports the selection (with armatures, shape keys and actions) to a temporary GLB,
-# runs `psx-forge model ... --json`, and imports the result into a "PSX_<name>"
+# runs `retrocrunch model ... --json`, and imports the result into a "PSX_<name>"
 # collection next to the original, so you can compare and keep iterating.
 
 bl_info = {
-    "name": "psx-forge",
-    "author": "psx-forge",
+    "name": "Retrocrunch",
+    "author": "Retrocrunch",
     "version": (0, 3, 0),
     "blender": (4, 2, 0),
-    "location": "3D Viewport > Sidebar > PSX Forge",
-    "description": "Convert selected objects into PS1-style assets with psx-forge",
+    "location": "3D Viewport > Sidebar > Retrocrunch",
+    "description": "Convert selected objects into PS1-style assets with retrocrunch",
     "category": "Import-Export",
 }
 
@@ -27,27 +27,27 @@ import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, StringProperty
 
 
-def find_psx_forge(prefs_path):
+def find_retrocrunch(prefs_path):
     if prefs_path and os.path.isfile(bpy.path.abspath(prefs_path)):
         return bpy.path.abspath(prefs_path)
-    env = os.environ.get("PSXFORGE_EXE")
+    env = os.environ.get("RETROCRUNCH_EXE")
     if env and os.path.isfile(env):
         return env
-    return shutil.which("psx-forge")
+    return shutil.which("retrocrunch")
 
 
-class PSXForgePreferences(bpy.types.AddonPreferences):
+class RetrocrunchPreferences(bpy.types.AddonPreferences):
     bl_idname = __name__
-    executable: StringProperty(name="psx-forge executable", subtype="FILE_PATH",
-                               description="Path to psx-forge(.exe). Empty = PSXFORGE_EXE or PATH")
+    executable: StringProperty(name="retrocrunch executable", subtype="FILE_PATH",
+                               description="Path to retrocrunch(.exe). Empty = RETROCRUNCH_EXE or PATH")
 
     def draw(self, context):
         self.layout.prop(self, "executable")
-        found = find_psx_forge(self.executable)
-        self.layout.label(text=f"Using: {found}" if found else "psx-forge not found", icon="CHECKMARK" if found else "ERROR")
+        found = find_retrocrunch(self.executable)
+        self.layout.label(text=f"Using: {found}" if found else "retrocrunch not found", icon="CHECKMARK" if found else "ERROR")
 
 
-class PSXForgeSettings(bpy.types.PropertyGroup):
+class RetrocrunchSettings(bpy.types.PropertyGroup):
     tris: IntProperty(name="Triangles", default=600, min=12, max=100000)
     tex_size: EnumProperty(name="Texture", default="128", items=[(s, f"{s} px", "") for s in ("16", "32", "64", "128", "256", "512", "1024")])
     colors: IntProperty(name="Colours", default=16, min=2, max=256)
@@ -94,7 +94,7 @@ def export_selection_glb(context, path):
             ob.select_set(ob in prev_sel)
 
 
-def run_psx_forge(exe, glb, out_dir, s, engine):
+def run_retrocrunch(exe, glb, out_dir, s, engine):
     cmd = [exe, "model", glb, "-o", out_dir, "--json", "--tris", str(s.tris), "--tex-size", s.tex_size,
            "--colors", str(s.colors), "--dither", s.dither, "--engine", engine, "--subdivide", str(s.subdivide),
            "--uv", s.uv]
@@ -106,7 +106,7 @@ def run_psx_forge(exe, glb, out_dir, s, engine):
         cmd.append("--grounded")
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
     if proc.returncode != 0:
-        raise RuntimeError(proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else "psx-forge failed")
+        raise RuntimeError(proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else "retrocrunch failed")
     return json.loads(proc.stdout)
 
 
@@ -119,24 +119,24 @@ def summarize(report):
     return text
 
 
-class PSXFORGE_OT_convert(bpy.types.Operator):
-    bl_idname = "psxforge.convert_selected"
+class RETROCRUNCH_OT_convert(bpy.types.Operator):
+    bl_idname = "retrocrunch.convert_selected"
     bl_label = "PSX-ify Selected"
-    bl_description = "Convert the selection with psx-forge and import the PS1 version next to it"
+    bl_description = "Convert the selection with retrocrunch and import the PS1 version next to it"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        exe = find_psx_forge(prefs_executable(context))
+        exe = find_retrocrunch(prefs_executable(context))
         if not exe:
-            self.report({"ERROR"}, "psx-forge not found: set it in the add-on preferences")
+            self.report({"ERROR"}, "retrocrunch not found: set it in the add-on preferences")
             return {"CANCELLED"}
-        s = context.scene.psx_forge
-        tmp = tempfile.mkdtemp(prefix="psxforge_")
+        s = context.scene.retrocrunch
+        tmp = tempfile.mkdtemp(prefix="retrocrunch_")
         name = bpy.path.clean_name(context.active_object.name if context.active_object else "selection")
         glb = os.path.join(tmp, f"{name}.glb")
         try:
             export_selection_glb(context, glb)
-            report = run_psx_forge(exe, glb, tmp, s, "blender")
+            report = run_retrocrunch(exe, glb, tmp, s, "blender")
         except Exception as e:  # noqa: BLE001 - surface any failure to the user
             self.report({"ERROR"}, str(e))
             return {"CANCELLED"}
@@ -162,24 +162,24 @@ class PSXFORGE_OT_convert(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class PSXFORGE_OT_export(bpy.types.Operator):
-    bl_idname = "psxforge.export_selected"
+class RETROCRUNCH_OT_export(bpy.types.Operator):
+    bl_idname = "retrocrunch.export_selected"
     bl_label = "Export for Engine"
     bl_description = "Convert the selection and write engine-ready files to the export folder"
 
     def execute(self, context):
-        exe = find_psx_forge(prefs_executable(context))
+        exe = find_retrocrunch(prefs_executable(context))
         if not exe:
-            self.report({"ERROR"}, "psx-forge not found: set it in the add-on preferences")
+            self.report({"ERROR"}, "retrocrunch not found: set it in the add-on preferences")
             return {"CANCELLED"}
-        s = context.scene.psx_forge
+        s = context.scene.retrocrunch
         out_dir = bpy.path.abspath(s.export_dir)
         os.makedirs(out_dir, exist_ok=True)
         name = bpy.path.clean_name(context.active_object.name if context.active_object else "selection")
-        glb = os.path.join(tempfile.mkdtemp(prefix="psxforge_"), f"{name}.glb")
+        glb = os.path.join(tempfile.mkdtemp(prefix="retrocrunch_"), f"{name}.glb")
         try:
             export_selection_glb(context, glb)
-            report = run_psx_forge(exe, glb, out_dir, s, s.engine)
+            report = run_retrocrunch(exe, glb, out_dir, s, s.engine)
         except Exception as e:  # noqa: BLE001
             self.report({"ERROR"}, str(e))
             return {"CANCELLED"}
@@ -188,18 +188,18 @@ class PSXFORGE_OT_export(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class PSXFORGE_OT_open_gui(bpy.types.Operator):
-    bl_idname = "psxforge.open_gui"
-    bl_label = "Open in psx-forge"
-    bl_description = "Export the selection and open it in the psx-forge app for interactive tuning"
+class RETROCRUNCH_OT_open_gui(bpy.types.Operator):
+    bl_idname = "retrocrunch.open_gui"
+    bl_label = "Open in retrocrunch"
+    bl_description = "Export the selection and open it in the retrocrunch app for interactive tuning"
 
     def execute(self, context):
-        exe = find_psx_forge(prefs_executable(context))
+        exe = find_retrocrunch(prefs_executable(context))
         if not exe:
-            self.report({"ERROR"}, "psx-forge not found")
+            self.report({"ERROR"}, "retrocrunch not found")
             return {"CANCELLED"}
         name = bpy.path.clean_name(context.active_object.name if context.active_object else "selection")
-        glb = os.path.join(tempfile.mkdtemp(prefix="psxforge_"), f"{name}.glb")
+        glb = os.path.join(tempfile.mkdtemp(prefix="retrocrunch_"), f"{name}.glb")
         try:
             export_selection_glb(context, glb)
         except Exception as e:  # noqa: BLE001
@@ -209,14 +209,14 @@ class PSXFORGE_OT_open_gui(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class PSXFORGE_PT_panel(bpy.types.Panel):
-    bl_label = "PSX Forge"
+class RETROCRUNCH_PT_panel(bpy.types.Panel):
+    bl_label = "Retrocrunch"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
-    bl_category = "PSX Forge"
+    bl_category = "Retrocrunch"
 
     def draw(self, context):
-        s = context.scene.psx_forge
+        s = context.scene.retrocrunch
         col = self.layout.column(align=True)
         for prop in ("tris", "tex_size", "colors", "dither", "uv", "subdivide"):
             col.prop(s, prop)
@@ -225,27 +225,27 @@ class PSXFORGE_PT_panel(bpy.types.Panel):
         col.prop(s, "ao")
         col.prop(s, "grounded")
         col.prop(s, "hide_original")
-        self.layout.operator("psxforge.convert_selected", icon="SHADING_TEXTURE")
+        self.layout.operator("retrocrunch.convert_selected", icon="SHADING_TEXTURE")
         box = self.layout.box()
         box.prop(s, "engine")
         box.prop(s, "export_dir")
-        box.operator("psxforge.export_selected", icon="EXPORT")
-        self.layout.operator("psxforge.open_gui", icon="WINDOW")
+        box.operator("retrocrunch.export_selected", icon="EXPORT")
+        self.layout.operator("retrocrunch.open_gui", icon="WINDOW")
         if s.last_report:
             self.layout.label(text=s.last_report, icon="INFO")
 
 
-CLASSES = (PSXForgePreferences, PSXForgeSettings, PSXFORGE_OT_convert, PSXFORGE_OT_export, PSXFORGE_OT_open_gui, PSXFORGE_PT_panel)
+CLASSES = (RetrocrunchPreferences, RetrocrunchSettings, RETROCRUNCH_OT_convert, RETROCRUNCH_OT_export, RETROCRUNCH_OT_open_gui, RETROCRUNCH_PT_panel)
 
 
 def register():
     for c in CLASSES:
         bpy.utils.register_class(c)
-    bpy.types.Scene.psx_forge = bpy.props.PointerProperty(type=PSXForgeSettings)
+    bpy.types.Scene.retrocrunch = bpy.props.PointerProperty(type=RetrocrunchSettings)
 
 
 def unregister():
-    del bpy.types.Scene.psx_forge
+    del bpy.types.Scene.retrocrunch
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)
 

@@ -1,7 +1,7 @@
-// psx-forge screen pass (used by psx_screen.gd): the PS1 dither table and colour depth,
+// retrocrunch screen pass (used by psx_screen.gd): the PS1 dither table and colour depth,
 // applied once per virtual pixel of the low-resolution render, like the real GPU did.
 // Optional CRT look (experimental): composite blur with colour bleed, scanlines and an
-// aperture grille, the same recipe as psx-forge's viewport.
+// aperture grille, the same recipe as retrocrunch's viewport.
 shader_type canvas_item;
 
 uniform bool dither = true;

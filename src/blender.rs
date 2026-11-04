@@ -1,5 +1,5 @@
 //! Blender bridge: find a Blender install and run it headless to
-//! (a) import formats psx-forge doesn't read natively (.blend, USD, Alembic, STL, PLY, ...)
+//! (a) import formats retrocrunch doesn't read natively (.blend, USD, Alembic, STL, PLY, ...)
 //! by converting them to GLB, and (b) turn exported GLBs into FBX for Unity / Mixamo.
 
 use anyhow::{Context, Result, bail};
@@ -87,13 +87,13 @@ if os.path.splitext(dst)[1].lower() == ".fbx":
 else:
     call(bpy.ops.export_scene.gltf, filepath=dst, export_format="GLB", export_apply=True,
          export_animations=True, export_skins=True, export_morph=True)
-print("PSXFORGE_OK")
+print("RETROCRUNCH_OK")
 "#;
 
-/// Blender executable: `PSXFORGE_BLENDER`, then PATH, then the usual install folders
+/// Blender executable: `RETROCRUNCH_BLENDER`, then PATH, then the usual install folders
 /// (newest version first).
 pub fn find_blender() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("PSXFORGE_BLENDER")
+    if let Some(p) = std::env::var_os("RETROCRUNCH_BLENDER")
         .map(PathBuf::from)
         .filter(|p| p.is_file())
     {
@@ -156,7 +156,7 @@ pub fn version(exe: &Path) -> Option<String> {
 
 fn require() -> Result<PathBuf> {
     find_blender().context(
-        "Blender not found: install Blender (blender.org) or set PSXFORGE_BLENDER to blender.exe",
+        "Blender not found: install Blender (blender.org) or set RETROCRUNCH_BLENDER to blender.exe",
     )
 }
 
@@ -199,11 +199,11 @@ if r != {"FINISHED"}:
     bpy.ops.object.voxel_remesh()
     weld()
     r = quadriflow()
-    print("PSXFORGE_VOXEL", r)
-print("PSXFORGE_QUADRIFLOW", r, len(ob.data.polygons))
+    print("RETROCRUNCH_VOXEL", r)
+print("RETROCRUNCH_QUADRIFLOW", r, len(ob.data.polygons))
 bpy.ops.wm.obj_export(filepath=dst, export_materials=False, export_uv=False,
                       export_normals=True, export_triangulated_mesh=True)
-print("PSXFORGE_OK")
+print("RETROCRUNCH_OK")
 "#;
 
 /// QuadriFlow can stall on awkward input; never hang a conversion on it.
@@ -298,7 +298,7 @@ pub fn remesh(
     use std::fmt::Write as _;
     let exe = require()?;
     REMESH_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join("psx-forge-blender");
+    let dir = std::env::temp_dir().join("retrocrunch-blender");
     std::fs::create_dir_all(&dir)?;
     let tag = format!("{}_{}", std::process::id(), target_quads);
     let (src, dst) = (
@@ -344,7 +344,7 @@ pub fn remesh(
     let out = output_with_timeout(cmd, REMESH_TIMEOUT, &dir.join(format!("remesh_log_{tag}")));
     let _ = std::fs::remove_file(&src);
     let (ok, stdout, stderr) = out?;
-    if !ok || !stdout.contains("PSXFORGE_OK") || !dst.is_file() {
+    if !ok || !stdout.contains("RETROCRUNCH_OK") || !dst.is_file() {
         let tail: Vec<&str> = stdout
             .lines()
             .chain(stderr.lines())
@@ -392,7 +392,7 @@ fn run(exe: &Path, input: &Path, output: &Path) -> Result<()> {
         .output()
         .with_context(|| format!("running {}", exe.display()))?;
     let stdout = String::from_utf8_lossy(&out.stdout);
-    if !out.status.success() || !stdout.contains("PSXFORGE_OK") || !output.is_file() {
+    if !out.status.success() || !stdout.contains("RETROCRUNCH_OK") || !output.is_file() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         let tail: Vec<&str> = stdout
             .lines()
@@ -425,6 +425,6 @@ pub fn temp_glb(input: &Path) -> PathBuf {
         .and_then(|s| s.to_str())
         .unwrap_or("model");
     std::env::temp_dir()
-        .join("psx-forge-blender")
+        .join("retrocrunch-blender")
         .join(format!("{stem}_{}.glb", std::process::id()))
 }

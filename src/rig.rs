@@ -355,7 +355,7 @@ impl Rig {
     }
 }
 
-/// Name of the skin psx-forge creates for node-animated (non-skinned) meshes.
+/// Name of the skin retrocrunch creates for node-animated (non-skinned) meshes.
 pub const RIGID_SKIN: &str = "psx_rigid";
 
 /// Normalise up to 4 influences; zero-weight slots get joint 0.

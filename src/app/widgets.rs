@@ -5,7 +5,7 @@ use egui::{
     Color32, ColorImage, Pos2, Rect, Response, Sense, TextureHandle, TextureOptions, Ui, Vec2,
 };
 use image::RgbaImage;
-use psx_forge::palette::Rgb;
+use retrocrunch::palette::Rgb;
 
 pub const ACCENT: Color32 = Color32::from_rgb(0x7c, 0x5c, 0xff);
 pub const ACCENT2: Color32 = Color32::from_rgb(0x2e, 0xd3, 0xb7);

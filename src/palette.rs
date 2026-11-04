@@ -557,7 +557,7 @@ pub fn save_palette(path: &Path, palette: &[Rgb]) -> Result<()> {
         .to_ascii_lowercase();
     let text = match ext.as_str() {
         "gpl" => {
-            let mut s = String::from("GIMP Palette\nName: psx-forge\nColumns: 8\n#\n");
+            let mut s = String::from("GIMP Palette\nName: retrocrunch\nColumns: 8\n#\n");
             for c in palette {
                 s.push_str(&format!("{:3} {:3} {:3}\tUntitled\n", c[0], c[1], c[2]));
             }
@@ -627,7 +627,7 @@ mod tests {
         let dir = std::env::temp_dir();
         let pal = vec![[1, 2, 3], [250, 128, 64]];
         for ext in ["gpl", "hex", "pal"] {
-            let p = dir.join(format!("psxforge_test_pal.{ext}"));
+            let p = dir.join(format!("retrocrunch_test_pal.{ext}"));
             save_palette(&p, &pal).unwrap();
             assert_eq!(load_palette(&p).unwrap(), pal, "{ext}");
             let _ = std::fs::remove_file(p);

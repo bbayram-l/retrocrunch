@@ -87,7 +87,7 @@ fn get(url: &str) -> Result<String> {
         .timeout(TIMEOUT)
         .set(
             "User-Agent",
-            concat!("psx-forge/", env!("CARGO_PKG_VERSION")),
+            concat!("retrocrunch/", env!("CARGO_PKG_VERSION")),
         )
         .call()
         .with_context(|| format!("fetching {url}"))?;
@@ -278,10 +278,10 @@ pub fn fetch_list(q: &ListQuery) -> Result<(Vec<LospecPalette>, usize)> {
     parse_list(&get(&q.url()?)?)
 }
 
-/// Where imported palettes are kept: `PSXFORGE_PALETTES`, else
-/// `%APPDATA%\psx-forge\palettes` / `~/.config/psx-forge/palettes`.
+/// Where imported palettes are kept: `RETROCRUNCH_PALETTES`, else
+/// `%APPDATA%\retrocrunch\palettes` / `~/.config/retrocrunch/palettes`.
 pub fn user_dir() -> PathBuf {
-    if let Some(d) = std::env::var_os("PSXFORGE_PALETTES") {
+    if let Some(d) = std::env::var_os("RETROCRUNCH_PALETTES") {
         return PathBuf::from(d);
     }
     crate::presets::user_dir()
@@ -545,10 +545,10 @@ mod tests {
 
     #[test]
     fn imported_palettes_round_trip_through_the_user_folder() {
-        let dir = std::env::temp_dir().join("psxforge_palettes_test");
+        let dir = std::env::temp_dir().join("retrocrunch_palettes_test");
         let _ = std::fs::remove_dir_all(&dir);
         // SAFETY (test only): no other test reads this variable.
-        unsafe { std::env::set_var("PSXFORGE_PALETTES", &dir) };
+        unsafe { std::env::set_var("RETROCRUNCH_PALETTES", &dir) };
         let p = builtin("steam-lords").unwrap();
         let path = save_user(&p).unwrap();
         assert!(path.ends_with("steam-lords.gpl"));

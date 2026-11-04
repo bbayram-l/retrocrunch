@@ -4,8 +4,8 @@
 
 use super::widgets::{ACCENT2, DIM, WARN, hint, open_folder, swatches};
 use egui::{RichText, Ui};
-use psx_forge::lospec::{self, CountFilter, ListQuery, LospecPalette, Sorting};
-use psx_forge::palette::Rgb;
+use retrocrunch::lospec::{self, CountFilter, ListQuery, LospecPalette, Sorting};
+use retrocrunch::palette::Rgb;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 

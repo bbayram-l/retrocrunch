@@ -8,9 +8,9 @@ use super::widgets::{ACCENT, ACCENT2, DIM, TexSlot, hint, section};
 use egui::{Color32, Key, RichText, Stroke, Ui};
 use glam::{IVec3, Vec2, Vec3};
 use image::RgbaImage;
-use psx_forge::blocks::{self, Atlas, Block, BlockWorld, Shape};
-use psx_forge::export::{self, ExportSettings};
-use psx_forge::raster::RasterOptions;
+use retrocrunch::blocks::{self, Atlas, Block, BlockWorld, Shape};
+use retrocrunch::export::{self, ExportSettings};
+use retrocrunch::raster::RasterOptions;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -47,7 +47,7 @@ pub struct BlocksTab {
     pub face_shading: bool,
     /// Bake AO + sun shadows into the vertex colours on export (experimental).
     pub bake_light: bool,
-    pub light: psx_forge::blocks::LevelLight,
+    pub light: retrocrunch::blocks::LevelLight,
     pub glb: bool,
     pub obj: bool,
     /// Split each block face into an N x N grid (1 = off) to limit affine warping.

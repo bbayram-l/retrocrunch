@@ -1,4 +1,4 @@
-// psx-forge palette cycling (experimental), 2D: the texture is stored as palette
+// retrocrunch palette cycling (experimental), 2D: the texture is stored as palette
 // indices, and the entries in [cycle_start, cycle_end] rotate over time, the classic
 // way to animate water, lava, lights and conveyor belts without new pixels.
 // index_texture: <name>_index.png (index = red * 255); palette_texture: <name>_palette.png.

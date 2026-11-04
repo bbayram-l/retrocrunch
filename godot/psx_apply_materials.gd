@@ -1,6 +1,6 @@
 @tool
 extends Node3D
-## psx-forge: assigns the PSX ShaderMaterials to every mesh surface of this imported
+## retrocrunch: assigns the PSX ShaderMaterials to every mesh surface of this imported
 ## scene, matched by material name. Used for rigged models, where Godot's glTF importer
 ## moves skinned meshes under the Skeleton3D, so fixed node paths can't be relied on.
 

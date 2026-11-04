@@ -2,7 +2,7 @@
 //!
 //! Renders the scene into an offscreen framebuffer at the retro resolution, then blits it
 //! up with nearest filtering, so PS1 pixelation is preserved at any window size. The
-//! shaders mirror `psx_forge::raster`: integer vertex snapping, the affine-weight UV
+//! shaders mirror `retrocrunch::raster`: integer vertex snapping, the affine-weight UV
 //! blend, nearest texturing, cutout alpha, fog, the PS1 dither table and 15-bit colour for
 //! the PSX view, and the same GGX + studio-environment model for the PBR reference.
 //! The CPU rasterizer remains the fallback (no GL, ordering-table mode, compile errors).
@@ -118,7 +118,7 @@ vec3 environment(vec3 d, float blur) {
 vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
 
 void main() {
-    if (u_mode == 4) { // CRT upscale (same recipe as psx_forge::crt)
+    if (u_mode == 4) { // CRT upscale (same recipe as retrocrunch::crt)
         vec2 o = gl_FragCoord.xy - u_vp_origin;
         vec2 uv = clamp(o / u_vp_size, 0.0, 0.9999);
         float sx = uv.x * u_src_res.x;

@@ -995,7 +995,7 @@ pub fn blender_info() -> Value {
             json!({"found": true, "path": p.display().to_string(), "version": crate::blender::version(&p), "import_formats": crate::blender::IMPORT_EXTS})
         }
         None => {
-            json!({"found": false, "hint": "Install Blender or set PSXFORGE_BLENDER to the blender executable"})
+            json!({"found": false, "hint": "Install Blender or set RETROCRUNCH_BLENDER to the blender executable"})
         }
     }
 }

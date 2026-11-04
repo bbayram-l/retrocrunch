@@ -1,0 +1,23 @@
+{
+  "boxes": [
+    {"from": [-6, 0, -6], "to": [6, 0, 6], "tile": 1},
+    {"from": [-6, 1, -6], "to": [6, 4, -6], "tile": 0},
+    {"from": [-6, 1, -6], "to": [-6, 3, 6], "tile": 0},
+    {"from": [-1, 1, -6], "to": [0, 2, -6], "erase": true},
+    {"from": [2, 1, -5], "to": [5, 1, -2], "tile": 2},
+    {"from": [-6, 4, -6], "to": [-6, 4, 6], "tile": 0, "shape": "Slab"}
+  ],
+  "cells": [
+    {"x": 2, "y": 1, "z": -1, "shape": "Wedge", "rot": 0, "tile": 2},
+    {"x": 3, "y": 1, "z": -1, "shape": "Wedge", "rot": 0, "tile": 2},
+    {"x": 4, "y": 1, "z": -1, "shape": "Wedge", "rot": 0, "tile": 2},
+    {"x": 5, "y": 1, "z": -1, "shape": "Wedge", "rot": 0, "tile": 2},
+    {"x": -3, "y": 1, "z": 2, "shape": "Pillar", "tile": 0},
+    {"x": -3, "y": 2, "z": 2, "shape": "Pillar", "tile": 0},
+    {"x": -3, "y": 3, "z": 2, "shape": "Pillar", "tile": 0},
+    {"x": 1, "y": 1, "z": 3, "shape": "Pillar", "tile": 0},
+    {"x": 1, "y": 2, "z": 3, "shape": "Pillar", "tile": 0},
+    {"x": 3, "y": 2, "z": -4, "shape": "Cube", "tile": 3},
+    {"x": -5, "y": 1, "z": -5, "shape": "InnerCorner", "tile": 0}
+  ]
+}

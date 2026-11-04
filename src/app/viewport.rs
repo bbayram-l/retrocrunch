@@ -6,8 +6,8 @@ use super::widgets::TexSlot;
 use egui::{Color32, Pos2, Rect, Response, Sense, Ui, Vec2};
 use glam::{Mat4, Vec2 as GVec2, Vec3};
 use image::RgbaImage;
-use psx_forge::mesh::Model;
-use psx_forge::raster::{self, DrawCall, FogSettings, Frame, OrbitCamera, RasterOptions};
+use retrocrunch::mesh::Model;
+use retrocrunch::raster::{self, DrawCall, FogSettings, Frame, OrbitCamera, RasterOptions};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -32,7 +32,7 @@ pub struct RenderScene {
     pub pieces: Vec<RenderPiece>,
     pub textures: Vec<Option<RgbaImage>>,
     /// Full materials (metal/rough, normal, emission) for the PBR reference view.
-    pub materials: Vec<psx_forge::mesh::Material>,
+    pub materials: Vec<retrocrunch::mesh::Material>,
     pub lo: Vec3,
     pub hi: Vec3,
     /// Bumped whenever content changes so the viewport knows to re-render.
@@ -514,7 +514,7 @@ impl Viewport {
                 // CRT scanlines need output resolution: upscale to about the screen size.
                 let scale = (rect.height() * ppp / fh as f32).round() as u32;
                 self.tex
-                    .set(ui.ctx(), "viewport", &psx_forge::crt::crt(&img, scale));
+                    .set(ui.ctx(), "viewport", &retrocrunch::crt::crt(&img, scale));
             } else {
                 self.tex.set(ui.ctx(), "viewport", &img);
             }
@@ -670,7 +670,7 @@ fn draw_call<'a>(p: &'a RenderPiece, s: &'a RenderScene, reference: bool) -> Dra
         .material
         .filter(|_| reference)
         .and_then(|m| s.materials.get(m))
-        .map(psx_forge::raster::PbrMaterial::from_material);
+        .map(retrocrunch::raster::PbrMaterial::from_material);
     DrawCall {
         positions: &p.positions,
         uvs: &p.uvs,

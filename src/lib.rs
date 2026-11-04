@@ -1,4 +1,4 @@
-//! psx-forge: a local PS1-style asset pipeline.
+//! retrocrunch: a local PS1-style asset pipeline.
 //!
 //! * `process`  – PS1-style model conversion (decimate, hidden faces, vertex AO, crunch).
 //! * `texture` / `palette` – texture crunching, palettes, dithering.

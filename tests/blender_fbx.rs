@@ -1,9 +1,9 @@
 //! Blender bridge + native FBX import, end to end. Skipped when Blender isn't installed.
 
 use glam::{Mat4, Quat, Vec2, Vec3};
-use psx_forge::export::{self, ExportSettings};
-use psx_forge::mesh::{Material, Model, Vertex};
-use psx_forge::rig::{Channel, Clip, Interpolation, Property, Rig, RigNode, Skin};
+use retrocrunch::export::{self, ExportSettings};
+use retrocrunch::mesh::{Material, Model, Vertex};
+use retrocrunch::rig::{Channel, Clip, Interpolation, Property, Rig, RigNode, Skin};
 
 /// A textured, skinned two-bone column with one bend clip.
 fn column() -> Model {
@@ -32,7 +32,7 @@ fn column() -> Model {
             indices.extend_from_slice(&[a, a + 8, b, b, a + 8, b + 8]);
         }
     }
-    let piece = psx_forge::mesh::Piece {
+    let piece = retrocrunch::mesh::Piece {
         name: "column".into(),
         vertices,
         indices,
@@ -97,11 +97,11 @@ fn column() -> Model {
 
 #[test]
 fn fbx_export_via_blender_reimports_natively_with_rig_clip_and_texture() {
-    if psx_forge::blender::find_blender().is_none() {
+    if retrocrunch::blender::find_blender().is_none() {
         eprintln!("Blender not installed: skipping");
         return;
     }
-    let dir = std::env::temp_dir().join("psxforge_fbx_it");
+    let dir = std::env::temp_dir().join("retrocrunch_fbx_it");
     let _ = std::fs::remove_dir_all(&dir);
     let s = ExportSettings {
         glb: true,
@@ -138,7 +138,9 @@ fn fbx_export_via_blender_reimports_natively_with_rig_clip_and_texture() {
             .vertices
             .iter()
             .filter(|v| v.pos.y > 1.99)
-            .map(|v| psx_forge::rig::skin_point(v.pos, v.joints, v.weights, &mats[p.skin.unwrap()]))
+            .map(|v| {
+                retrocrunch::rig::skin_point(v.pos, v.joints, v.weights, &mats[p.skin.unwrap()])
+            })
             .collect();
         assert!(!top.is_empty());
         top.iter().copied().sum::<Vec3>() / top.len() as f32
@@ -149,7 +151,7 @@ fn fbx_export_via_blender_reimports_natively_with_rig_clip_and_texture() {
 
 #[test]
 fn remesh_first_evens_out_triangles_on_static_models() {
-    if psx_forge::blender::find_blender().is_none() {
+    if retrocrunch::blender::find_blender().is_none() {
         eprintln!("Blender not installed: skipped");
         return;
     }
@@ -171,16 +173,16 @@ fn remesh_first_evens_out_triangles_on_static_models() {
         }
         q.iter().sum::<f32>() / q.len().max(1) as f32
     };
-    let ps = psx_forge::process::PieceSettings::defaults_for(&m);
-    let base = psx_forge::process::ConvertSettings {
+    let ps = retrocrunch::process::PieceSettings::defaults_for(&m);
+    let base = retrocrunch::process::ConvertSettings {
         target_tris: 60,
         ..Default::default()
     };
-    let plain = psx_forge::process::convert(&m, &ps, &base, None, &|_, _| {});
-    let remeshed = psx_forge::process::convert(
+    let plain = retrocrunch::process::convert(&m, &ps, &base, None, &|_, _| {});
+    let remeshed = retrocrunch::process::convert(
         &m,
         &ps,
-        &psx_forge::process::ConvertSettings {
+        &retrocrunch::process::ConvertSettings {
             remesh: true,
             ..base.clone()
         },
@@ -206,28 +208,28 @@ fn remesh_first_evens_out_triangles_on_static_models() {
 
     // Texture-only changes reuse the remesh; a new budget runs Blender again.
     use std::sync::atomic::Ordering;
-    let runs = psx_forge::blender::REMESH_RUNS.load(Ordering::Relaxed);
-    let mut texture_change = psx_forge::process::ConvertSettings {
+    let runs = retrocrunch::blender::REMESH_RUNS.load(Ordering::Relaxed);
+    let mut texture_change = retrocrunch::process::ConvertSettings {
         remesh: true,
         ..base.clone()
     };
     texture_change.texture.colors = 4;
     texture_change.texture.max_size = 64;
-    let again = psx_forge::process::convert(&m, &ps, &texture_change, None, &|_, _| {});
+    let again = retrocrunch::process::convert(&m, &ps, &texture_change, None, &|_, _| {});
     assert_eq!(
-        psx_forge::blender::REMESH_RUNS.load(Ordering::Relaxed),
+        retrocrunch::blender::REMESH_RUNS.load(Ordering::Relaxed),
         runs,
         "cached"
     );
     assert_eq!(again.model.tri_count(), remeshed.model.tri_count());
-    let budget_change = psx_forge::process::ConvertSettings {
+    let budget_change = retrocrunch::process::ConvertSettings {
         remesh: true,
         target_tris: 40,
         ..base.clone()
     };
-    psx_forge::process::convert(&m, &ps, &budget_change, None, &|_, _| {});
+    retrocrunch::process::convert(&m, &ps, &budget_change, None, &|_, _| {});
     assert_eq!(
-        psx_forge::blender::REMESH_RUNS.load(Ordering::Relaxed),
+        retrocrunch::blender::REMESH_RUNS.load(Ordering::Relaxed),
         runs + 1,
         "new budget remeshes"
     );

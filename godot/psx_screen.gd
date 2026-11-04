@@ -1,7 +1,7 @@
 extends Control
-## psx-forge screen pass. Renders this node's 3D children at a PS1 resolution (240 lines
+## retrocrunch screen pass. Renders this node's 3D children at a PS1 resolution (240 lines
 ## by default, width from the window's aspect) and scales the result up with nearest
-## filtering. Dither and 15-bit colour run here, once per virtual pixel, so psx-forge
+## filtering. Dither and 15-bit colour run here, once per virtual pixel, so retrocrunch
 ## materials below it get theirs switched off.
 ##
 ## Usage: add a Control with this script to your main scene and put the 3D level (camera
@@ -17,7 +17,7 @@ extends Control
 @export var color_levels := 32.0
 ## Experimental CRT look: scanlines, composite colour bleed, aperture grille.
 @export var crt := false
-## Switch off per-pixel dither/colour depth in psx-forge materials under this node, so
+## Switch off per-pixel dither/colour depth in retrocrunch materials under this node, so
 ## they aren't applied twice.
 @export var take_over_materials := true
 

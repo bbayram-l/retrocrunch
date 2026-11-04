@@ -6,8 +6,8 @@ use super::widgets::{
 };
 use egui::{RichText, Ui};
 use image::RgbaImage;
-use psx_forge::palette::Rgb;
-use psx_forge::texture::{
+use retrocrunch::palette::Rgb;
+use retrocrunch::texture::{
     self, AlphaMode, BakeMaps, CrunchSettings, DitherMode, PaletteMode, ResizeFilter,
 };
 use serde::{Deserialize, Serialize};
@@ -45,7 +45,7 @@ struct Cycle {
     start: usize,
     end: usize,
     speed: f32,
-    indexed: Option<psx_forge::palette_cycle::Indexed>,
+    indexed: Option<retrocrunch::palette_cycle::Indexed>,
     tex: TexSlot,
     step: Option<i64>,
 }
@@ -287,7 +287,7 @@ impl TextureTab {
                             .set_file_name("palette.hex")
                             .save_file()
                     {
-                        match psx_forge::palette::save_palette(&p, pal) {
+                        match retrocrunch::palette::save_palette(&p, pal) {
                             Ok(()) => sh.status = format!("Saved {}", p.display()),
                             Err(e) => sh.error = Some(e.to_string()),
                         }
@@ -306,7 +306,7 @@ impl TextureTab {
         if self.cycle.indexed.is_none()
             && let Some((img, pal)) = &self.result
         {
-            self.cycle.indexed = Some(psx_forge::palette_cycle::index_image(img, pal));
+            self.cycle.indexed = Some(retrocrunch::palette_cycle::index_image(img, pal));
         }
     }
 
@@ -329,7 +329,7 @@ impl TextureTab {
             .unwrap_or("texture")
             .to_string();
         let c = &self.cycle;
-        match psx_forge::palette_cycle::export(&dir, &name, ix, c.start, c.end, c.speed) {
+        match retrocrunch::palette_cycle::export(&dir, &name, ix, c.start, c.end, c.speed) {
             Ok(files) => {
                 sh.status = format!("Palette cycle: {} files in {}", files.len(), dir.display())
             }
@@ -417,7 +417,7 @@ impl TextureTab {
                 if self.cycle.indexed.is_none()
                     && let Some((img, pal)) = &self.result
                 {
-                    self.cycle.indexed = Some(psx_forge::palette_cycle::index_image(img, pal));
+                    self.cycle.indexed = Some(retrocrunch::palette_cycle::index_image(img, pal));
                 }
                 if let Some(ix) = &self.cycle.indexed {
                     let f = ix.frame(self.cycle.start, self.cycle.end, step);

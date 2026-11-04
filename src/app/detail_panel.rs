@@ -5,10 +5,10 @@ use super::rig_panel::{BrushStroke, brush_hits};
 use super::viewport::{RenderPiece, RenderScene, ViewInfo};
 use super::widgets::{hint, section, slider_f32};
 use egui::{Color32, Stroke, Ui};
-use psx_forge::detail::DetailField;
-use psx_forge::mesh::Model;
-use psx_forge::process::ConvertSettings;
-use psx_forge::weights;
+use retrocrunch::detail::DetailField;
+use retrocrunch::mesh::Model;
+use retrocrunch::process::ConvertSettings;
+use retrocrunch::weights;
 use std::sync::Arc;
 
 pub struct DetailEditor {

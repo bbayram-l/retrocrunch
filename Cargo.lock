@@ -2216,27 +2216,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "psx-forge"
-version = "0.8.0"
-dependencies = [
- "anyhow",
- "clap",
- "eframe",
- "egui",
- "glam",
- "gltf",
- "image",
- "meshopt",
- "png",
- "rfd",
- "serde",
- "serde_json",
- "tobj",
- "ufbx",
- "ureq",
-]
-
-[[package]]
 name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2332,6 +2311,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "580c875845b41ecb1564ad1ae4703044cef774145e3d7a94dc2b3fa7c97868fd"
 dependencies = [
  "bitflags 2.13.2",
+]
+
+[[package]]
+name = "retrocrunch"
+version = "0.8.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "eframe",
+ "egui",
+ "glam",
+ "gltf",
+ "image",
+ "meshopt",
+ "png",
+ "rfd",
+ "serde",
+ "serde_json",
+ "tobj",
+ "ufbx",
+ "ureq",
 ]
 
 [[package]]

@@ -1,11 +1,11 @@
-//! psx-forge: GUI by default, a scriptable CLI (`--json` for machine output), or an MCP
-//! server for coding agents (`psx-forge mcp`).
+//! retrocrunch: GUI by default, a scriptable CLI (`--json` for machine output), or an MCP
+//! server for coding agents (`retrocrunch mcp`).
 
 mod app;
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use psx_forge::ops::{
+use retrocrunch::ops::{
     self, BlocksJob, ModelOptions, PreviewJob, ScaleJob, SpriteJob, TextureJob, TextureOptions,
 };
 use serde_json::Value;
@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
-    name = "psx-forge",
+    name = "retrocrunch",
     version,
     about = "Local PS1-style asset pipeline. Run without arguments for the GUI."
 )]
@@ -65,9 +65,9 @@ enum Cmd {
     Sprites(SpritesArgs),
     /// Palettes: the 10 built-ins, import from lospec.com, or browse the Lospec list.
     ///
-    /// `psx-forge palettes` lists the built-ins (use as `--palette builtin:<slug>`).
-    /// `psx-forge palettes pico-8 --save pico8.gpl` imports one (also into the app's library).
-    /// `psx-forge palettes --tag horror --colors 16 --count max` browses Lospec.
+    /// `retrocrunch palettes` lists the built-ins (use as `--palette builtin:<slug>`).
+    /// `retrocrunch palettes pico-8 --save pico8.gpl` imports one (also into the app's library).
+    /// `retrocrunch palettes --tag horror --colors 16 --count max` browses Lospec.
     Palettes {
         /// Lospec slug or URL to import.
         lospec: Option<String>,
@@ -109,7 +109,7 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum BlenderCmd {
-    /// Show the Blender executable psx-forge will use.
+    /// Show the Blender executable retrocrunch will use.
     Status,
     /// Convert through headless Blender; the output extension (.glb/.fbx) decides the format.
     Convert { input: PathBuf, output: PathBuf },
@@ -260,7 +260,7 @@ struct ModelArgs {
     #[arg(long)]
     chart_angle: Option<f32>,
     /// Start from a preset (built-in or user name, or a .json file); other options
-    /// override it only where they differ from their defaults. See `psx-forge presets`.
+    /// override it only where they differ from their defaults. See `retrocrunch presets`.
     #[arg(long)]
     preset: Option<String>,
     /// HD texture: keep the source's texel density and full colour (no palette, dither
@@ -475,22 +475,28 @@ fn run_gui(file: Option<PathBuf>) -> Result<()> {
     }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("psx-forge")
+            .with_title("Retrocrunch")
             .with_inner_size([1360.0, 860.0])
             .with_min_inner_size([900.0, 600.0])
             .with_drag_and_drop(true),
         ..Default::default()
     };
     eframe::run_native(
-        "psx-forge",
+        "retrocrunch",
         options,
-        Box::new(move |cc| Ok(Box::new(app::PsxForgeApp::new(cc, file)))),
+        Box::new(move |cc| Ok(Box::new(app::RetrocrunchApp::new(cc, file)))),
     )
     .map_err(|e| anyhow::anyhow!("GUI error: {e}"))
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    // Before anything reads settings: psx-forge's folder becomes Retrocrunch's.
+    match retrocrunch::presets::migrate_legacy_config() {
+        Ok(true) => eprintln!("Moved psx-forge settings, presets and palettes to Retrocrunch."),
+        Ok(false) => {}
+        Err(e) => eprintln!("Couldn't carry over psx-forge settings: {e:#}"),
+    }
     let json = cli.json;
     let progress = move |m: &str, f: f32| {
         if !json {
@@ -508,7 +514,7 @@ fn main() -> Result<()> {
             } else {
                 Some(root.map_or_else(std::env::current_dir, Ok)?)
             };
-            return psx_forge::mcp::serve(root);
+            return retrocrunch::mcp::serve(root);
         }
         Some(Cmd::Model(a)) => {
             let engine = a.engine.name();
@@ -576,7 +582,7 @@ fn main() -> Result<()> {
         Some(Cmd::Sprites(a)) => ops::render_sprites(
             &a.input,
             &a.out,
-            &psx_forge::export::SpriteSheetJob {
+            &retrocrunch::export::SpriteSheetJob {
                 directions: a.directions,
                 size: a.size,
                 pitch_degrees: a.pitch,
@@ -606,7 +612,7 @@ fn main() -> Result<()> {
                 if let Some(c) = colors {
                     args["colors"] = serde_json::json!(c);
                 }
-                psx_forge::mcp::call_palettes(&args)?
+                retrocrunch::mcp::call_palettes(&args)?
             } else {
                 ops::builtin_palettes()
             };

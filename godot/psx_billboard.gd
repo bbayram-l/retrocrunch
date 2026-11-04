@@ -1,5 +1,5 @@
 extends AnimatedSprite3D
-## psx-forge billboard (experimental): shows the sprite-sheet row that faces the camera,
+## retrocrunch billboard (experimental): shows the sprite-sheet row that faces the camera,
 ## like Doom-style 2.5D characters. Row d was rendered from yaw d * 360 / directions
 ## around the model's +Y axis, starting at the front (+Z). Rotate this node (or its
 ## parent) to turn the character; the animation frame carries over between rows.

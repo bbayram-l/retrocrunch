@@ -5,10 +5,10 @@ use super::viewport::{RenderPiece, RenderScene, ViewInfo};
 use super::widgets::{ACCENT, ACCENT2, DIM, WARN, hint, section, slider_f32};
 use egui::{Color32, Rect, Stroke, Ui};
 use glam::{EulerRot, Mat4, Quat, Vec3};
-use psx_forge::mesh::Model;
-use psx_forge::raster::{self, DrawCall, Frame, RasterOptions};
-use psx_forge::rig::Rig;
-use psx_forge::weights::{self, BrushMode, Neighbours, WeightSnapshot};
+use retrocrunch::mesh::Model;
+use retrocrunch::raster::{self, DrawCall, Frame, RasterOptions};
+use retrocrunch::rig::Rig;
+use retrocrunch::weights::{self, BrushMode, Neighbours, WeightSnapshot};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 

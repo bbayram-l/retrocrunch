@@ -1,18 +1,18 @@
-# psx-forge for coding agents
+# Retrocrunch for coding agents
 
-psx-forge turns models, textures and sprites into PS1-style game assets. Agents use it
-through the MCP server (`psx-forge mcp`) or the CLI with `--json`. Both call the same
+Retrocrunch turns models, textures and sprites into PS1-style game assets. Agents use it
+through the MCP server (`retrocrunch mcp`) or the CLI with `--json`. Both call the same
 operations (`src/ops.rs`) and return the same JSON reports.
 
 ## Setup
 
 ```powershell
 cargo build --release
-claude mcp add psx-forge -- C:\path\to\psx-forge\target\release\psx-forge.exe mcp
+claude mcp add retrocrunch -- C:\path\to\retrocrunch\target\release\retrocrunch.exe mcp
 ```
 
 Blender is optional. It enables `.blend`/USD/Alembic/STL/PLY import and FBX export.
-Check it with the `blender_info` tool or `psx-forge blender status`.
+Check it with the `blender_info` tool or `retrocrunch blender status`.
 
 ## Recommended loop for a model
 

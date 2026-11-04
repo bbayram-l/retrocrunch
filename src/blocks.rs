@@ -842,7 +842,7 @@ mod tests {
                 tile: 7,
             }),
         );
-        let p = std::env::temp_dir().join("psxforge_blocks.json");
+        let p = std::env::temp_dir().join("retrocrunch_blocks.json");
         w.save(&p).unwrap();
         let back = BlockWorld::load(&p).unwrap();
         assert_eq!(back.cells, w.cells);

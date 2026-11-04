@@ -794,7 +794,7 @@ mod tests {
             ..Default::default()
         };
         let out = crunch(&img, &s, &BakeMaps::default(), None);
-        let p = std::env::temp_dir().join("psxforge_idx.png");
+        let p = std::env::temp_dir().join("retrocrunch_idx.png");
         save_png(&p, &out.image, true).unwrap();
         let back = image::open(&p).unwrap().to_rgba8();
         assert_eq!(back, out.image);

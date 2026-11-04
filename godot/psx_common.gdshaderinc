@@ -1,6 +1,6 @@
-// psx-forge: shared PlayStation-style material code for Godot 4 (psx_*.gdshader).
+// retrocrunch: shared PlayStation-style material code for Godot 4 (psx_*.gdshader).
 //
-// The colour maths match psx-forge's own preview: texture x vertex colour x tint are
+// The colour maths match retrocrunch's own preview: texture x vertex colour x tint are
 // multiplied as 8-bit sRGB values (the PS1 GPU modulated texels by Gouraud colour that
 // way), fog mixes in the same space, the PS1 4x4 dither table is added, and the result is
 // truncated to 15-bit. Lighting is pre-baked into vertex colours, so the material is
@@ -89,7 +89,7 @@ void fragment() {
 		ivec2 p = ivec2(FRAGCOORD.xy) & ivec2(3);
 		s += PS1_DITHER[p.y * 4 + p.x];
 	}
-	// Truncate like the hardware (and psx-forge's preview), then drop to the colour depth.
+	// Truncate like the hardware (and retrocrunch's preview), then drop to the colour depth.
 	s = clamp(floor(s), 0.0, 255.0);
 	float step_size = 256.0 / clamp(color_levels, 2.0, 256.0);
 	s = floor(s / step_size) * step_size;

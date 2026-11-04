@@ -1,4 +1,4 @@
-// psx-forge palette cycling (experimental), 3D: an unshaded material whose texture is
+// retrocrunch palette cycling (experimental), 3D: an unshaded material whose texture is
 // stored as palette indices; entries in [cycle_start, cycle_end] rotate over time.
 // index_texture: <name>_index.png (index = red * 255); palette_texture: <name>_palette.png.
 shader_type spatial;

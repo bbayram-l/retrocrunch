@@ -26,10 +26,10 @@ impl ModelTab {
                 ui.checkbox(&mut self.export.fbx, "FBX")
                     .on_hover_text("Binary FBX through headless Blender: keeps skeletons and clips (Unity Humanoid / Mixamo). Needs Blender.");
             });
-            if self.export.fbx && psx_forge::blender::find_blender().is_none() {
+            if self.export.fbx && retrocrunch::blender::find_blender().is_none() {
                 ui.label(
                     RichText::new(
-                        "Blender not found: FBX falls back to OBJ. Set PSXFORGE_BLENDER.",
+                        "Blender not found: FBX falls back to OBJ. Set RETROCRUNCH_BLENDER.",
                     )
                     .color(WARN)
                     .small(),
@@ -70,9 +70,9 @@ impl ModelTab {
                 .clicked()
                 && let Some(c) = &self.converted
             {
-                let l = psx_forge::vram::layout(&c.stats.textures);
+                let l = retrocrunch::vram::layout(&c.stats.textures);
                 let mut slot = TexSlot::default();
-                slot.set(ui.ctx(), "vram_map", &psx_forge::vram::layout_image(&l));
+                slot.set(ui.ctx(), "vram_map", &retrocrunch::vram::layout_image(&l));
                 self.vram_map = Some((slot, l));
             }
             ui.collapsing("Sprite sheet (experimental)", |ui| {
@@ -111,7 +111,7 @@ impl ModelTab {
             .anim_clip
             .and_then(|i| c.model.rig.as_ref().and_then(|r| r.clips.get(i)))
             .map(|clip| clip.name.clone());
-        match psx_forge::ops::write_sprite_sheet(&c.model, &c.model.name, &dir, &job) {
+        match retrocrunch::ops::write_sprite_sheet(&c.model, &c.model.name, &dir, &job) {
             Ok(v) => {
                 sh.status = format!(
                     "Sprite sheet: {} directions x {} frames (+ Godot scene) in {}",
@@ -149,7 +149,7 @@ impl ModelTab {
                             format!("_{i}")
                         }
                     ));
-                    let _ = psx_forge::palette::save_palette(&p, pal);
+                    let _ = retrocrunch::palette::save_palette(&p, pal);
                 }
                 sh.status = format!("Exported {} files to {}", files.len(), target.display());
                 self.last_export_dir = Some(dir);

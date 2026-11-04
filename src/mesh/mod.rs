@@ -738,7 +738,7 @@ pub(crate) mod tests {
 
     #[test]
     fn file_references_never_leave_the_model_folder() {
-        let dir = std::env::temp_dir().join("psxforge_safe_paths");
+        let dir = std::env::temp_dir().join("retrocrunch_safe_paths");
         std::fs::create_dir_all(&dir).unwrap();
         assert_eq!(
             safe_local_path(&dir, "tex.png").unwrap(),
@@ -769,7 +769,7 @@ pub(crate) mod tests {
 
     #[test]
     fn gltf_with_external_absolute_uri_is_rejected() {
-        let dir = std::env::temp_dir().join("psxforge_gltf_uri");
+        let dir = std::env::temp_dir().join("retrocrunch_gltf_uri");
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("evil.gltf");
         std::fs::write(&p, r#"{"asset":{"version":"2.0"},"buffers":[{"uri":"\\\\attacker\\share\\b.bin","byteLength":4}]}"#).unwrap();
@@ -801,7 +801,7 @@ pub(crate) mod tests {
         assert_eq!(percent_decode("%4"), "%4");
         assert_eq!(percent_decode("%zz"), "%zz");
         // And the loader rejects such a URI instead of crashing.
-        let dir = std::env::temp_dir().join("psxforge_gltf_utf8");
+        let dir = std::env::temp_dir().join("retrocrunch_gltf_utf8");
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("utf8.gltf");
         std::fs::write(
@@ -814,7 +814,7 @@ pub(crate) mod tests {
 
     #[test]
     fn obj_mtllib_outside_folder_is_not_followed() {
-        let root = std::env::temp_dir().join("psxforge_obj_mtl");
+        let root = std::env::temp_dir().join("retrocrunch_obj_mtl");
         let dir = root.join("model");
         std::fs::create_dir_all(&dir).unwrap();
         // A real MTL sits one folder up; the OBJ asks for it with "..".
@@ -831,7 +831,7 @@ pub(crate) mod tests {
 
     #[test]
     fn obj_import_reads_triangles() {
-        let dir = std::env::temp_dir().join("psxforge_obj_test");
+        let dir = std::env::temp_dir().join("retrocrunch_obj_test");
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("quad.obj");
         std::fs::write(&p, "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\nf 1/1 2/2 3/3 4/4\n").unwrap();

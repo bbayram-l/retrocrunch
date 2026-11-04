@@ -6,7 +6,7 @@ use super::texture_tab::IMAGE_EXTS;
 use super::widgets::{self, DIM, ImageView, TexSlot, hint, section, slider_f32, slider_u32};
 use egui::{RichText, Ui};
 use image::{DynamicImage, RgbaImage};
-use psx_forge::sprite::{self, LightSettings, SpriteMaps, SpriteSettings};
+use retrocrunch::sprite::{self, LightSettings, SpriteMaps, SpriteSettings};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 

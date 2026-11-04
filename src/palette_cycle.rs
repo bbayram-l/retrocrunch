@@ -154,7 +154,7 @@ mod tests {
         // A full loop comes back; negative steps go the other way.
         assert_eq!(ix.frame(1, 3, 3), ix.frame(1, 3, 0));
         assert_eq!(ix.frame(1, 3, -1), ix.frame(1, 3, 2));
-        let dir = std::env::temp_dir().join("psxforge_cycle_test");
+        let dir = std::env::temp_dir().join("retrocrunch_cycle_test");
         let _ = std::fs::remove_dir_all(&dir);
         let files = export(&dir, "water", &ix, 1, 3, 6.0).unwrap();
         assert!(files.iter().any(|f| f.ends_with("water_cycle.gif")));

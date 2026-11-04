@@ -323,11 +323,13 @@ pub fn builtins() -> Vec<Preset> {
     ]
 }
 
-/// `%APPDATA%\psx-forge\presets` on Windows, `$XDG_CONFIG_HOME` or `~/.config/psx-forge/presets` elsewhere.
-pub fn user_dir() -> PathBuf {
-    if let Some(d) = std::env::var_os("PSXFORGE_PRESETS").map(PathBuf::from) {
-        return d;
-    }
+/// Settings folder name (presets, palettes; on Windows also the GUI's window state).
+const APP_DIR: &str = "retrocrunch";
+/// The folder's name before the rename to Retrocrunch (0.9).
+const LEGACY_DIR: &str = "psx-forge";
+
+/// `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere.
+fn config_base() -> PathBuf {
     let base = if cfg!(windows) {
         std::env::var_os("APPDATA").map(PathBuf::from)
     } else {
@@ -336,8 +338,30 @@ pub fn user_dir() -> PathBuf {
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
     };
     base.unwrap_or_else(|| PathBuf::from("."))
-        .join("psx-forge")
-        .join("presets")
+}
+
+/// `%APPDATA%\retrocrunch\presets` on Windows, `$XDG_CONFIG_HOME` or `~/.config/retrocrunch/presets` elsewhere.
+pub fn user_dir() -> PathBuf {
+    if let Some(d) = std::env::var_os("RETROCRUNCH_PRESETS").map(PathBuf::from) {
+        return d;
+    }
+    config_base().join(APP_DIR).join("presets")
+}
+
+/// Carry presets, palettes and window state over from the psx-forge settings folder:
+/// renames it to the new name once, if the new folder doesn't exist yet.
+pub fn migrate_legacy_config() -> Result<bool> {
+    move_legacy_dir(&config_base())
+}
+
+fn move_legacy_dir(base: &Path) -> Result<bool> {
+    let (old, new) = (base.join(LEGACY_DIR), base.join(APP_DIR));
+    if !old.is_dir() || new.exists() {
+        return Ok(false);
+    }
+    std::fs::rename(&old, &new)
+        .with_context(|| format!("moving {} to {}", old.display(), new.display()))?;
+    Ok(true)
 }
 
 fn slug(name: &str) -> String {
@@ -530,8 +554,38 @@ mod tests {
     }
 
     #[test]
+    fn legacy_psx_forge_folder_moves_once_and_never_overwrites() {
+        let base = std::env::temp_dir().join("retrocrunch_migrate_test");
+        let _ = std::fs::remove_dir_all(&base);
+        let old = base.join(LEGACY_DIR).join("presets");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("mine.json"), "{}").unwrap();
+        assert!(move_legacy_dir(&base).unwrap(), "moved");
+        assert!(
+            base.join(APP_DIR)
+                .join("presets")
+                .join("mine.json")
+                .is_file()
+        );
+        assert!(!base.join(LEGACY_DIR).exists());
+        // Nothing to move the second time.
+        assert!(!move_legacy_dir(&base).unwrap());
+        // Both exist: the new folder is kept as is, the old one left alone.
+        std::fs::create_dir_all(base.join(LEGACY_DIR)).unwrap();
+        assert!(!move_legacy_dir(&base).unwrap());
+        assert!(base.join(LEGACY_DIR).exists());
+        assert!(
+            base.join(APP_DIR)
+                .join("presets")
+                .join("mine.json")
+                .is_file()
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn user_presets_save_load_delete_and_reserve_builtin_names() {
-        let dir = std::env::temp_dir().join("psxforge_presets_test");
+        let dir = std::env::temp_dir().join("retrocrunch_presets_test");
         let _ = std::fs::remove_dir_all(&dir);
         let mut p = builtins().remove(0);
         p.name = "My Characters!".into();

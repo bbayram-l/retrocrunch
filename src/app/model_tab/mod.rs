@@ -15,10 +15,12 @@ use super::widgets::{
     self, ACCENT2, DIM, TexSlot, WARN, enum_combo, hint, section, slider_f32, slider_usize,
 };
 use egui::{RichText, Ui};
-use psx_forge::export::{self, EnginePreset, ExportSettings};
-use psx_forge::mesh::Model;
-use psx_forge::process::{self, ConvertSettings, Converted, PieceSettings, TextureSizing, UvMode};
-use psx_forge::texture::{AlphaMode, DitherMode, PaletteMode, ResizeFilter};
+use retrocrunch::export::{self, EnginePreset, ExportSettings};
+use retrocrunch::mesh::Model;
+use retrocrunch::process::{
+    self, ConvertSettings, Converted, PieceSettings, TextureSizing, UvMode,
+};
+use retrocrunch::texture::{AlphaMode, DitherMode, PaletteMode, ResizeFilter};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -56,7 +58,7 @@ pub struct ModelTab {
     /// Name of the preset last applied (shown with "modified" when settings drift).
     pub active_preset: Option<String>,
     #[serde(skip)]
-    presets: Option<Vec<psx_forge::presets::Preset>>,
+    presets: Option<Vec<retrocrunch::presets::Preset>>,
     #[serde(skip)]
     save_preset: Option<SavePresetDialog>,
     #[serde(skip)]
@@ -81,9 +83,9 @@ pub struct ModelTab {
     #[serde(skip)]
     detail: DetailEditor,
     /// Sprite sheet settings (experimental).
-    pub sprites: psx_forge::export::SpriteSheetJob,
+    pub sprites: retrocrunch::export::SpriteSheetJob,
     #[serde(skip)]
-    vram_map: Option<(TexSlot, psx_forge::vram::VramLayout)>,
+    vram_map: Option<(TexSlot, retrocrunch::vram::VramLayout)>,
     #[serde(skip)]
     rig_min_tris: usize,
     #[serde(skip)]
@@ -181,7 +183,7 @@ impl ModelTab {
     pub fn open_dialog(&mut self, sh: &mut Shared) {
         if let Some(p) = rfd::FileDialog::new()
             .add_filter("3D models", &MODEL_EXTS)
-            .add_filter("Via Blender", psx_forge::blender::IMPORT_EXTS)
+            .add_filter("Via Blender", retrocrunch::blender::IMPORT_EXTS)
             .pick_file()
         {
             self.load(p, sh);
@@ -251,7 +253,7 @@ impl ModelTab {
                         );
                         self.pieces = PieceSettings::defaults_for(&m);
                         self.rig_min_tris = if m.is_rigged() {
-                            psx_forge::decimate::recommended_min_tris(&m.pieces)
+                            retrocrunch::decimate::recommended_min_tris(&m.pieces)
                         } else {
                             0
                         };
@@ -509,7 +511,7 @@ impl ModelTab {
             let base = p.morphed_positions(&weights);
             for ((out, v), b) in rp.positions.iter_mut().zip(&p.vertices).zip(base) {
                 *out = match skin {
-                    Some(m) => psx_forge::rig::skin_point(b, v.joints, v.weights, m),
+                    Some(m) => retrocrunch::rig::skin_point(b, v.joints, v.weights, m),
                     None => b,
                 };
             }

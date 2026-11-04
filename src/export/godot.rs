@@ -343,7 +343,7 @@ impl GodotVariant {
             ("back faces culled", "cull_back")
         };
         format!(
-            "// psx-forge PSX material: {what}, {sides}. The code lives in psx_common.gdshaderinc.\n\
+            "// retrocrunch PSX material: {what}, {sides}. The code lives in psx_common.gdshaderinc.\n\
              shader_type spatial;\n\
              render_mode unshaded, {cull}, depth_draw_opaque{blend};\n\
              {define}#include \"psx_common.gdshaderinc\"\n"

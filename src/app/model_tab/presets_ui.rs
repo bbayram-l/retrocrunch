@@ -3,23 +3,23 @@
 use super::*;
 
 impl ModelTab {
-    pub(super) fn all_presets(&mut self, sh: &mut Shared) -> &Vec<psx_forge::presets::Preset> {
+    pub(super) fn all_presets(&mut self, sh: &mut Shared) -> &Vec<retrocrunch::presets::Preset> {
         self.presets.get_or_insert_with(|| {
-            let (user, errors) = psx_forge::presets::load_user();
+            let (user, errors) = retrocrunch::presets::load_user();
             if !errors.is_empty() {
                 sh.error = Some(format!(
                     "Some presets could not be read:\n{}",
                     errors.join("\n")
                 ));
             }
-            psx_forge::presets::builtins()
+            retrocrunch::presets::builtins()
                 .into_iter()
                 .chain(user)
                 .collect()
         })
     }
 
-    pub(super) fn apply_preset(&mut self, p: &psx_forge::presets::Preset, sh: &mut Shared) {
+    pub(super) fn apply_preset(&mut self, p: &retrocrunch::presets::Preset, sh: &mut Shared) {
         self.settings = p.convert.clone();
         if let Some(e) = &p.export {
             self.export = e.clone();
@@ -93,8 +93,8 @@ impl ModelTab {
                         .add_filter("Preset", &["json"])
                         .pick_file()
                     {
-                        match psx_forge::presets::read(&path)
-                            .and_then(|p| psx_forge::presets::save_user(&p).map(|_| p))
+                        match retrocrunch::presets::read(&path)
+                            .and_then(|p| retrocrunch::presets::save_user(&p).map(|_| p))
                         {
                             Ok(p) => {
                                 self.presets = None;
@@ -112,7 +112,7 @@ impl ModelTab {
                         .set_file_name(format!("{}.json", export::sanitize(&name)))
                         .save_file()
                     {
-                        let p = psx_forge::presets::Preset {
+                        let p = retrocrunch::presets::Preset {
                             name,
                             category: "My presets".into(),
                             description: String::new(),
@@ -121,7 +121,7 @@ impl ModelTab {
                             builtin: false,
                             path: None,
                         };
-                        match psx_forge::presets::write(&path, &p) {
+                        match retrocrunch::presets::write(&path, &p) {
                             Ok(()) => sh.status = format!("Preset written to {}", path.display()),
                             Err(e) => sh.error = Some(format!("{e:#}")),
                         }
@@ -134,7 +134,7 @@ impl ModelTab {
                 {
                     ui.close_menu();
                     if let Some(p) = deletable {
-                        match psx_forge::presets::delete_user(&p) {
+                        match retrocrunch::presets::delete_user(&p) {
                             Ok(()) => {
                                 self.presets = None;
                                 self.active_preset = None;
@@ -146,7 +146,7 @@ impl ModelTab {
                 }
                 if ui.button("Open presets folder").clicked() {
                     ui.close_menu();
-                    widgets::open_folder(&psx_forge::presets::user_dir());
+                    widgets::open_folder(&retrocrunch::presets::user_dir());
                 }
                 if ui.button("Reload presets").clicked() {
                     ui.close_menu();
@@ -191,7 +191,7 @@ impl ModelTab {
                 );
                 hint(
                     ui,
-                    &format!("Saved to {}", psx_forge::presets::user_dir().display()),
+                    &format!("Saved to {}", retrocrunch::presets::user_dir().display()),
                 );
                 save = ui
                     .add_enabled(
@@ -201,7 +201,7 @@ impl ModelTab {
                     .clicked();
             });
         if save {
-            let p = psx_forge::presets::Preset {
+            let p = retrocrunch::presets::Preset {
                 name: d.name.trim().to_string(),
                 category: d.category.trim().to_string(),
                 description: d.description.trim().to_string(),
@@ -210,7 +210,7 @@ impl ModelTab {
                 builtin: false,
                 path: None,
             };
-            match psx_forge::presets::save_user(&p) {
+            match retrocrunch::presets::save_user(&p) {
                 Ok(path) => {
                     sh.status = format!("Saved preset '{}' to {}", p.name, path.display());
                     self.active_preset = Some(p.name);
