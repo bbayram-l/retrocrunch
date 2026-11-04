@@ -3,6 +3,7 @@
 mod blocks_tab;
 mod gpu;
 mod model_tab;
+mod rig_panel;
 mod scale_tab;
 mod sprite_tab;
 mod texture_tab;

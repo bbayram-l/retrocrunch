@@ -144,6 +144,8 @@ pub struct ModelOptions {
     pub preset: Option<String>,
     /// HD texture: source texel density and full colour on the low-poly model.
     pub hd_texture: bool,
+    /// Remesh static models in Blender (voxel + QuadriFlow) before decimating.
+    pub remesh: bool,
 }
 
 impl Default for ModelOptions {
@@ -171,6 +173,7 @@ impl Default for ModelOptions {
             chart_angle: None,
             preset: None,
             hd_texture: false,
+            remesh: false,
         }
     }
 }
@@ -348,6 +351,9 @@ pub fn model_settings(
     }
     if set(o.hd_texture != d.hd_texture) {
         s.hd_texture = o.hd_texture;
+    }
+    if set(o.remesh != d.remesh) {
+        s.remesh = o.remesh;
     }
     Ok(s)
 }

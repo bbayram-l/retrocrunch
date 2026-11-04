@@ -118,6 +118,12 @@ pub struct ConvertSettings {
     /// Gutter between atlas charts, in texels.
     #[serde(default = "default_atlas_padding")]
     pub atlas_padding: u32,
+    /// Rebuild static models as an even, closed surface before decimation (Blender voxel
+    /// remesh + QuadriFlow): fewer long slivers, so less affine warping and smoother
+    /// vertex lighting; repairs scans. Textures are rebaked into a fresh atlas.
+    pub remesh: bool,
+    /// Remeshed triangles per final triangle (the decimator then reduces to the budget).
+    pub remesh_density: f32,
     /// HD texture: keep the source's texel density and full colour (no palette, dither
     /// or 15-bit snap) on the low-poly model. Still pixel-sharp with nearest filtering.
     pub hd_texture: bool,
@@ -142,6 +148,8 @@ impl Default for ConvertSettings {
             ambient: 0.55,
             bake_shading_into_texture: false,
             hd_texture: false,
+            remesh: false,
+            remesh_density: 3.0,
             texture: CrunchSettings::default(),
             sizing: TextureSizing::Fixed,
             texel_cm: 2.0,
@@ -413,6 +421,44 @@ fn shading_in_uv(
     buf
 }
 
+/// Replace `src` by a Blender remesh (static models only). Returns whether it happened.
+fn remesh_pieces(
+    src: &mut Vec<Piece>,
+    model: &Model,
+    budget: usize,
+    s: &ConvertSettings,
+    stats: &mut Stats,
+    progress: Progress,
+) -> bool {
+    if model.is_rigged() || src.iter().any(Piece::has_morphs) {
+        stats.warnings.push(
+            "Remesh skipped: it would lose skin weights and morph targets (static models only)."
+                .into(),
+        );
+        return false;
+    }
+    progress("Remeshing (Blender)", 0.03);
+    let tris = (budget.max(1) as f32 * s.remesh_density.max(1.0)) as usize;
+    match crate::blender::remesh(src, tris.div_ceil(2)) {
+        Ok(p) if !p.is_empty() => {
+            *src = p;
+            true
+        }
+        Ok(_) => {
+            stats
+                .warnings
+                .push("Remesh produced no geometry: kept the original.".into());
+            false
+        }
+        Err(e) => {
+            stats
+                .warnings
+                .push(format!("Remesh failed, kept the original mesh: {e:#}"));
+            false
+        }
+    }
+}
+
 struct PreparedTexture {
     image: RgbaImage,
     pixels: Vec<Rgb>,
@@ -431,7 +477,13 @@ pub fn convert(
         ..Default::default()
     };
     progress("Gathering pieces", 0.02);
-    let src = gather_pieces(model, ps);
+    let mut src = gather_pieces(model, ps);
+    let budget_hint = if s.use_percent {
+        (model.tri_count() as f32 * s.percent / 100.0).round() as usize
+    } else {
+        s.target_tris
+    };
+    let remeshed = s.remesh && remesh_pieces(&mut src, model, budget_hint, s, &mut stats, progress);
 
     // 1. Budget + decimation.
     let total: usize = src.iter().map(Piece::tri_count).sum();
@@ -506,8 +558,8 @@ pub fn convert(
     let any_baked = ps.iter().any(|p| p.baked && p.enabled);
     let any_textured = model.materials.iter().any(|m| m.albedo.is_some());
     let mut atlas_materials: Option<Vec<Material>> = None;
-    if (s.uv_mode == UvMode::Atlas && any_textured) || any_baked {
-        if s.uv_mode == UvMode::Keep {
+    if (s.uv_mode == UvMode::Atlas && any_textured) || any_baked || remeshed {
+        if s.uv_mode == UvMode::Keep && !remeshed {
             stats.warnings.push(
                 "Baking pieces into the texture needs a fresh UV atlas: used Atlas mode.".into(),
             );

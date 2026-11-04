@@ -25,3 +25,4 @@ pub mod scale;
 pub mod sprite;
 pub mod texture;
 pub mod visibility;
+pub mod weights;

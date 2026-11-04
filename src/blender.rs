@@ -160,6 +160,170 @@ fn require() -> Result<PathBuf> {
     )
 }
 
+const REMESH_SCRIPT: &str = r#"
+import bpy, sys
+argv = sys.argv[sys.argv.index("--") + 1:]
+src, dst, target, voxel = argv[0], argv[1], int(argv[2]), float(argv[3])
+bpy.ops.wm.read_factory_settings(use_empty=True)
+bpy.ops.wm.obj_import(filepath=src)
+meshes = [o for o in bpy.context.scene.objects if o.type == "MESH"]
+if not meshes:
+    raise RuntimeError("nothing to remesh")
+bpy.ops.object.select_all(action="DESELECT")
+for o in meshes:
+    o.select_set(True)
+bpy.context.view_layer.objects.active = meshes[0]
+if len(meshes) > 1:
+    bpy.ops.object.join()
+ob = bpy.context.view_layer.objects.active
+
+def weld():
+    # Joins UV-seam duplicates, and QuadriFlow rejects near-zero edges.
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    bpy.ops.mesh.remove_doubles(threshold=voxel * 0.003)
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+def quadriflow():
+    # Even, curvature-aligned quads.
+    return bpy.ops.object.quadriflow_remesh(mode="FACES", target_faces=target, seed=0)
+
+# Clean meshes (open ones included) remesh directly. Anything QuadriFlow refuses
+# (non-manifold, flipped faces, triangle soup) is first rebuilt as one closed surface
+# by a voxel remesh; that would turn open surfaces into double-walled shells, so it's
+# only the fallback. If QuadriFlow still gives up, the voxel result is kept.
+weld()
+r = quadriflow()
+if r != {"FINISHED"}:
+    ob.data.remesh_voxel_size = voxel
+    bpy.ops.object.voxel_remesh()
+    weld()
+    r = quadriflow()
+    print("PSXFORGE_VOXEL", r)
+print("PSXFORGE_QUADRIFLOW", r, len(ob.data.polygons))
+bpy.ops.wm.obj_export(filepath=dst, export_materials=False, export_uv=False,
+                      export_normals=True, export_triangulated_mesh=True)
+print("PSXFORGE_OK")
+"#;
+
+/// QuadriFlow can stall on awkward input; never hang a conversion on it.
+const REMESH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// Run `cmd`, killing it after `limit`. Output goes through files (no pipe deadlock).
+/// Returns (success, stdout, stderr).
+fn output_with_timeout(
+    mut cmd: Command,
+    limit: std::time::Duration,
+    log: &Path,
+) -> Result<(bool, String, String)> {
+    let (out_path, err_path) = (log.with_extension("out"), log.with_extension("err"));
+    cmd.stdout(std::fs::File::create(&out_path)?)
+        .stderr(std::fs::File::create(&err_path)?);
+    let mut child = cmd.spawn().context("starting Blender")?;
+    let start = std::time::Instant::now();
+    let status = loop {
+        if let Some(s) = child.try_wait()? {
+            break Some(s);
+        }
+        if start.elapsed() > limit {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let read = |p: &Path| std::fs::read_to_string(p).unwrap_or_default();
+    let (stdout, stderr) = (read(&out_path), read(&err_path));
+    let _ = std::fs::remove_file(&out_path);
+    let _ = std::fs::remove_file(&err_path);
+    match status {
+        Some(s) => Ok((s.success(), stdout, stderr)),
+        None => bail!(
+            "Blender took longer than {}s and was stopped",
+            limit.as_secs()
+        ),
+    }
+}
+
+/// Rebuild `pieces` as one even, closed surface: voxel remesh, then QuadriFlow to about
+/// `target_quads` quads, triangulated. Positions only: UVs, colours, materials, skins and
+/// morphs are gone, so callers rebake textures from the original pieces.
+pub fn remesh(
+    pieces: &[crate::mesh::Piece],
+    target_quads: usize,
+) -> Result<Vec<crate::mesh::Piece>> {
+    use std::fmt::Write as _;
+    let exe = require()?;
+    let dir = std::env::temp_dir().join("psx-forge-blender");
+    std::fs::create_dir_all(&dir)?;
+    let tag = format!("{}_{}", std::process::id(), target_quads);
+    let (src, dst) = (
+        dir.join(format!("remesh_in_{tag}.obj")),
+        dir.join(format!("remesh_out_{tag}.obj")),
+    );
+    let mut obj = String::new();
+    let mut base = 1usize;
+    let mut area = 0.0f32;
+    for p in pieces {
+        for v in &p.vertices {
+            writeln!(obj, "v {} {} {}", v.pos.x, v.pos.y, v.pos.z)?;
+        }
+        for t in p.indices.chunks_exact(3) {
+            writeln!(
+                obj,
+                "f {} {} {}",
+                t[0] as usize + base,
+                t[1] as usize + base,
+                t[2] as usize + base
+            )?;
+        }
+        base += p.vertices.len();
+        area += p.surface_area();
+    }
+    std::fs::write(&src, obj)?;
+    // About 4 voxel faces per target quad: dense enough for QuadriFlow, small enough to be fast.
+    let target_quads = target_quads.clamp(16, 200_000);
+    let voxel = (area / (target_quads as f32 * 4.0)).sqrt().max(1e-5);
+    let mut cmd = Command::new(&exe);
+    cmd.args([
+        "-b",
+        "--factory-startup",
+        "--disable-autoexec",
+        "--python-exit-code",
+        "1",
+    ])
+    .args(["--python-expr", REMESH_SCRIPT, "--"])
+    .arg(&src)
+    .arg(&dst)
+    .arg(target_quads.to_string())
+    .arg(voxel.to_string());
+    let out = output_with_timeout(cmd, REMESH_TIMEOUT, &dir.join(format!("remesh_log_{tag}")));
+    let _ = std::fs::remove_file(&src);
+    let (ok, stdout, stderr) = out?;
+    if !ok || !stdout.contains("PSXFORGE_OK") || !dst.is_file() {
+        let tail: Vec<&str> = stdout
+            .lines()
+            .chain(stderr.lines())
+            .filter(|l| !l.trim().is_empty())
+            .collect();
+        bail!(
+            "Blender remesh failed:\n{}",
+            tail[tail.len().saturating_sub(12)..].join("\n")
+        );
+    }
+    let model = crate::mesh::Model::load(&dst);
+    let _ = std::fs::remove_file(&dst);
+    let mut out_pieces = model?.pieces;
+    for p in &mut out_pieces {
+        p.name = "remeshed".into();
+        p.material = None;
+        for v in &mut p.vertices {
+            v.color = [1.0; 4];
+        }
+    }
+    Ok(out_pieces)
+}
+
 fn run(exe: &Path, input: &Path, output: &Path) -> Result<()> {
     if let Some(parent) = output.parent() {
         std::fs::create_dir_all(parent)?;

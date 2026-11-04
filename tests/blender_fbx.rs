@@ -146,3 +146,61 @@ fn fbx_export_via_blender_reimports_natively_with_rig_clip_and_texture() {
     let (a, b) = (pose(&column()), pose(&back));
     assert!((a - b).length() < 0.05, "posed top differs: {a} vs {b}");
 }
+
+#[test]
+fn remesh_first_evens_out_triangles_on_static_models() {
+    if psx_forge::blender::find_blender().is_none() {
+        eprintln!("Blender not installed: skipped");
+        return;
+    }
+    // A static, textured, sliver-heavy plank: long thin triangles along its length.
+    let mut m = column();
+    m.rig = None;
+    for p in &mut m.pieces {
+        p.skin = None;
+    }
+    let quality = |m: &Model| {
+        let mut q = Vec::new();
+        for p in &m.pieces {
+            for t in p.indices.chunks_exact(3) {
+                let [a, b, c] = [0, 1, 2].map(|k| p.vertices[t[k] as usize].pos);
+                let e2 =
+                    (b - a).length_squared() + (c - b).length_squared() + (a - c).length_squared();
+                q.push(4.0 * 3f32.sqrt() * 0.5 * (b - a).cross(c - a).length() / e2.max(1e-12));
+            }
+        }
+        q.iter().sum::<f32>() / q.len().max(1) as f32
+    };
+    let ps = psx_forge::process::PieceSettings::defaults_for(&m);
+    let base = psx_forge::process::ConvertSettings {
+        target_tris: 60,
+        ..Default::default()
+    };
+    let plain = psx_forge::process::convert(&m, &ps, &base, None, &|_, _| {});
+    let remeshed = psx_forge::process::convert(
+        &m,
+        &ps,
+        &psx_forge::process::ConvertSettings {
+            remesh: true,
+            ..base.clone()
+        },
+        None,
+        &|_, _| {},
+    );
+    assert!(
+        remeshed.stats.warnings.is_empty(),
+        "{:?}",
+        remeshed.stats.warnings
+    );
+    assert!(
+        remeshed.stats.atlas.is_some(),
+        "textures rebaked into an atlas"
+    );
+    let (qp, qr) = (quality(&plain.model), quality(&remeshed.model));
+    assert!(
+        qr > qp,
+        "remeshed triangles should be better shaped: {qr} vs {qp}"
+    );
+    let tris = remeshed.model.tri_count();
+    assert!((30..=90).contains(&tris), "budget respected: {tris}");
+}

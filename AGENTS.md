@@ -33,6 +33,8 @@ Check it with the `blender_info` tool or `psx-forge blender status`.
      (no palette, dither or 15-bit); `tex_size` and `colors` are ignored.
    - Floors and walls warp: set `subdivide` to about 1/4 of the model size.
    - Holes in the mesh: set `remove_hidden: false`.
+   - Long thin triangles (texture swims, blotchy lighting) or a messy scan on a static
+     model: set `remesh: true` (needs Blender; rigged/morphed models are refused).
    - Small separate parts (straps, pockets, decals, badges) waste triangles: pass their
      piece names from `inspect_model` in `bake_pieces`. They are removed from the
      geometry and painted into the texture underneath. If they don't show up, raise

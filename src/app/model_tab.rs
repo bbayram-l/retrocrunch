@@ -1,6 +1,7 @@
 //! Model tab: PS1-style conversion with live PS1 preview.
 
 use super::Shared;
+use super::rig_panel::RigEditor;
 use super::viewport::{Controls, RenderScene, Viewport, axis_gizmo};
 use super::widgets::{
     self, ACCENT2, DIM, TexSlot, WARN, enum_combo, hint, section, slider_f32, slider_usize,
@@ -59,9 +60,15 @@ pub struct ModelTab {
     anim_time: f32,
     #[serde(skip)]
     anim_playing: bool,
-    /// Pose currently baked into the displayed scene: (scene is original?, clip, time).
+    /// Pose currently baked into the displayed scene (see `apply_pose`).
     #[serde(skip)]
-    posed: Option<(bool, Option<usize>, f32)>,
+    posed: Option<String>,
+    /// World matrices of the displayed pose (skeleton overlay).
+    #[serde(skip)]
+    pose_world: Vec<glam::Mat4>,
+    /// Bone list, test posing and the weight brush.
+    #[serde(skip)]
+    rig: RigEditor,
     #[serde(skip)]
     rig_min_tris: usize,
     #[serde(skip)]
@@ -132,6 +139,8 @@ impl Default for ModelTab {
             anim_time: 0.0,
             anim_playing: false,
             posed: None,
+            pose_world: Vec::new(),
+            rig: RigEditor::default(),
             rig_min_tris: 0,
         }
     }
@@ -196,12 +205,13 @@ impl ModelTab {
 
     fn settings_key(&self, sh: &Shared) -> String {
         format!(
-            "{}|{}|{}",
+            "{}|{}|{}|w{}",
             serde_json::to_string(&self.settings).unwrap_or_default(),
             serde_json::to_string(&self.pieces).unwrap_or_default(),
             sh.palette
                 .as_ref()
-                .map_or(String::new(), |p| p.name.clone())
+                .map_or(String::new(), |p| p.name.clone()),
+            self.rig.revision
         )
     }
 
@@ -235,6 +245,7 @@ impl ModelTab {
                         self.anim_playing = self.anim_clip.is_some();
                         self.anim_time = 0.0;
                         self.posed = None;
+                        self.rig.reset();
                         self.undo.clear();
                         self.redo.clear();
                         self.selected.clear();
@@ -641,6 +652,9 @@ impl ModelTab {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 self.pieces_section(ui);
+                if let Some(src) = self.source.as_mut() {
+                    self.rig.section(ui, src);
+                }
                 self.geometry_section(ui);
                 self.lighting_section(ui);
                 self.texture_section(ui, sh);
@@ -809,6 +823,10 @@ impl ModelTab {
     }
 
     fn geometry_section(&mut self, ui: &mut Ui) {
+        let animated = self
+            .source
+            .as_ref()
+            .is_some_and(|m| m.is_rigged() || m.pieces.iter().any(|p| p.has_morphs()));
         let s = &mut self.settings;
         section(ui, "Geometry", true, |ui| {
             ui.horizontal(|ui| {
@@ -836,6 +854,23 @@ impl ModelTab {
                 );
             }
             hint(ui, "PS1 reference: props 100-500, characters 300-1500.");
+            ui.add_enabled_ui(!animated, |ui| {
+                ui.checkbox(&mut s.remesh, "Remesh first (Blender)").on_hover_text(
+                    "Rebuild the model as one even, closed surface (voxel remesh + QuadriFlow)                      before reducing: far fewer long slivers, so less affine texture warping and                      smoother vertex lighting; repairs messy scans. Textures are rebaked into a                      new atlas. Needs Blender; static models only.",
+                );
+                if s.remesh {
+                    slider_f32(
+                        ui,
+                        "remesh density",
+                        &mut s.remesh_density,
+                        1.0..=8.0,
+                        3.0,
+                        "Remeshed triangles per final triangle; the reducer then brings it down to the budget",
+                    );
+                }
+            })
+            .response
+            .on_disabled_hover_text("Remesh would lose skin weights and morph targets.");
             ui.checkbox(&mut s.lock_borders, "Lock open borders")
                 .on_hover_text(
                     "Keep mesh boundaries (silhouettes of open meshes) intact; reduces less",
@@ -985,9 +1020,14 @@ impl ModelTab {
 
     /// Skin the displayed scene into the current pose (CPU linear blend skinning).
     fn apply_pose(&mut self) {
-        let original = self.show_original || self.scene_out.is_none();
-        let key = (original, self.anim_clip, self.anim_time);
-        if self.posed == Some(key) {
+        let original = self.show_original || self.scene_out.is_none() || self.rig.wants_source();
+        let key = format!(
+            "{original}|{:?}|{}|{}",
+            self.anim_clip,
+            self.anim_time,
+            self.rig.pose_key()
+        );
+        if self.posed.as_deref() == Some(key.as_str()) {
             return;
         }
         let (model, scene) = if original {
@@ -1002,13 +1042,19 @@ impl ModelTab {
             return;
         };
         let Some(rig) = model.rig.as_ref().filter(|_| model.has_animation()) else {
+            self.pose_world.clear();
             return;
         };
         let (clip, t) = (self.anim_clip, self.anim_time);
-        let mats = rig.skin_matrices(&rig.world(&rig.pose(clip, t)));
+        let mut pose = rig.pose(clip, t);
+        self.rig.apply_manual(&mut pose);
+        let world = rig.world(&pose);
+        let posed = clip.is_some() || !self.rig.pose.is_empty();
+        let mats = rig.skin_matrices(&world);
         for (rp, p) in scene.pieces.iter_mut().zip(&model.pieces) {
-            let skin = p.skin.and_then(|s| mats.get(s)).filter(|_| clip.is_some());
-            if (skin.is_none() && !p.has_morphs()) || rp.positions.len() != p.vertices.len() {
+            let skin = p.skin.and_then(|s| mats.get(s)).filter(|_| posed);
+            // Skinned pieces are rewritten even in bind pose, so leaving a pose resets them.
+            if (p.skin.is_none() && !p.has_morphs()) || rp.positions.len() != p.vertices.len() {
                 continue;
             }
             // Morphs first (in bind space), then skinning, like a GPU would.
@@ -1026,6 +1072,7 @@ impl ModelTab {
         }
         self.generation += 1;
         scene.generation = self.generation;
+        self.pose_world = world;
         self.posed = Some(key);
     }
 
@@ -1376,19 +1423,51 @@ impl ModelTab {
             0.0
         };
         let avail = ui.available_size();
-        let reference = self.show_original || self.scene_out.is_none();
-        let scene = if reference {
-            self.scene_src.as_ref()
+        let weights_on =
+            self.rig.wants_source() && self.source.as_ref().is_some_and(|m| m.is_rigged());
+        let reference = self.show_original || self.scene_out.is_none() || weights_on;
+        let controls = if weights_on && self.rig.paint {
+            Controls::Editor
         } else {
-            self.scene_out.as_ref()
+            Controls::Viewer
+        };
+        let scene = match (&self.source, &self.scene_src) {
+            (Some(m), Some(s)) if weights_on => Some(self.rig.weight_scene(m, s)),
+            _ if reference => self.scene_src.as_ref(),
+            _ => self.scene_out.as_ref(),
         };
         let info = ui
             .allocate_ui(egui::vec2(avail.x, (avail.y - tex_h).max(100.0)), |ui| {
-                self.viewport
-                    .show(ui, scene, Controls::Viewer, &[], reference)
+                self.viewport.show(ui, scene, controls, &[], reference)
             })
             .inner;
-        if reference {
+        // Skeleton overlay on whichever model is displayed, then the weight brush.
+        let shown = if reference {
+            self.source.as_deref()
+        } else {
+            self.converted.as_ref().map(|c| &c.model)
+        };
+        if let Some(m) = shown {
+            self.rig.overlay(ui, &info, m, &self.pose_world);
+        }
+        if weights_on
+            && let (Some(src), Some(scene)) = (self.source.as_mut(), self.scene_src.as_ref())
+        {
+            self.rig.paint_input(ui, &info, scene, src);
+        }
+        if weights_on {
+            ui.painter_at(info.rect).text(
+                info.rect.right_top() + egui::vec2(-8.0, 26.0),
+                egui::Align2::RIGHT_TOP,
+                if self.rig.paint {
+                    "Weight paint: LMB paint · RMB orbit · MMB pan · Ctrl+click joint"
+                } else {
+                    "Weights of the selected bone (blue 0 -> red 1)"
+                },
+                egui::FontId::proportional(12.0),
+                ACCENT2,
+            );
+        } else if reference {
             ui.painter_at(info.rect).text(
                 info.rect.right_top() + egui::vec2(-8.0, 8.0),
                 egui::Align2::RIGHT_TOP,

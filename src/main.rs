@@ -225,6 +225,10 @@ struct ModelArgs {
     /// or 15-bit) on the low-poly model. Pixel-sharp but high resolution.
     #[arg(long)]
     hd_texture: bool,
+    /// Remesh static models first (Blender voxel remesh + QuadriFlow): even triangles,
+    /// repaired scans; textures are rebaked into a fresh atlas.
+    #[arg(long)]
+    remesh: bool,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -453,6 +457,7 @@ fn main() -> Result<()> {
                 chart_angle: a.chart_angle,
                 preset: a.preset,
                 hd_texture: a.hd_texture,
+                remesh: a.remesh,
             };
             ops::convert_model(&o, &progress)?
         }
