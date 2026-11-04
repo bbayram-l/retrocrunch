@@ -3,6 +3,7 @@
 //! ordering-table depth sorting (no z-buffer), GPU dither and 15-bit colour.
 //! Also used for ID/depth renders (hidden-face removal, ambient occlusion).
 
+use crate::palette::{linear_to_srgb, srgb_to_linear};
 use crate::texture::PS1_DITHER;
 use glam::{Mat4, Vec2, Vec3, Vec4};
 use image::{GrayImage, RgbaImage};
@@ -441,22 +442,6 @@ fn render_with_threads(
             }
         }
     });
-}
-
-fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-fn linear_to_srgb(c: f32) -> f32 {
-    if c <= 0.003_130_8 {
-        c * 12.92
-    } else {
-        1.055 * c.powf(1.0 / 2.4) - 0.055
-    }
 }
 
 fn bilinear(img: &RgbaImage, uv: Vec2) -> Vec4 {

@@ -726,8 +726,8 @@ pub fn convert(
         let f = m.base_color;
         if !atlas && f[..3] != [1.0, 1.0, 1.0] {
             for p in img.pixels_mut() {
-                for c in 0..3 {
-                    p.0[c] = (p.0[c] as f32 * f[c]).clamp(0.0, 255.0) as u8;
+                for (ch, k) in p.0.iter_mut().zip(&f[..3]) {
+                    *ch = (*ch as f32 * k).clamp(0.0, 255.0) as u8;
                 }
             }
         }
@@ -841,8 +841,8 @@ pub fn convert(
             .is_some_and(|m| baked_shading.get(m).copied().unwrap_or(false));
         for (vi, v) in p.vertices.iter_mut().enumerate() {
             let l = if baked { 1.0 } else { shade[pi][vi] };
-            for c in 0..3 {
-                v.color[c] = (v.color[c] * tint[c] * l).clamp(0.0, 1.0);
+            for (ch, t) in v.color.iter_mut().zip(&tint[..3]) {
+                *ch = (*ch * t * l).clamp(0.0, 1.0);
             }
             if !textured && s.texture.rgb555 {
                 for c in 0..3 {

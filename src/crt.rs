@@ -13,38 +13,13 @@ pub const MASK: f32 = 0.78;
 /// Brightness compensation for scanlines and mask.
 pub const GAIN: f32 = 1.3;
 
-fn srgb_to_lin(v: u8) -> f32 {
-    let c = v as f32 / 255.0;
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-fn lin_to_srgb(c: f32) -> u8 {
-    let c = c.clamp(0.0, 1.0);
-    let s = if c <= 0.003_130_8 {
-        c * 12.92
-    } else {
-        1.055 * c.powf(1.0 / 2.4) - 0.055
-    };
-    (s * 255.0).round() as u8
-}
-
 /// Upscale `src` by `scale` (2..=6) with the CRT look. Alpha is kept as is (nearest).
 pub fn crt(src: &RgbaImage, scale: u32) -> RgbaImage {
     let scale = scale.clamp(2, 6);
     let (w, h) = src.dimensions();
     let lin: Vec<[f32; 3]> = src
         .pixels()
-        .map(|p| {
-            [
-                srgb_to_lin(p.0[0]),
-                srgb_to_lin(p.0[1]),
-                srgb_to_lin(p.0[2]),
-            ]
-        })
+        .map(|p| crate::palette::to_linear([p.0[0], p.0[1], p.0[2]]))
         .collect();
     let at = |x: f32, y: u32, c: usize| {
         let xi = (x.floor() as i64).clamp(0, w as i64 - 1) as u32;
@@ -76,12 +51,8 @@ pub fn crt(src: &RgbaImage, scale: u32) -> RgbaImage {
         );
         let vig = 1.0 - 0.35 * (u * u + v * v);
         let a = src.get_pixel((sx as u32).min(w - 1), sy).0[3];
-        px.0 = [
-            lin_to_srgb(rgb[0] * vig),
-            lin_to_srgb(rgb[1] * vig),
-            lin_to_srgb(rgb[2] * vig),
-            a,
-        ];
+        let c = crate::palette::linear_to_srgb8(rgb.map(|v| v * vig));
+        px.0 = [c[0], c[1], c[2], a];
     }
     out
 }

@@ -6,6 +6,12 @@ All notable changes to psx-forge. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Internal clean-up, no behaviour change (41 reference outputs byte-identical):
+  `export`, `mesh` and the Model tab are split into focused modules, one copy of the
+  sRGB transfer curve is shared by the rasterizer, palettes and CRT pass, and the
+  remaining clippy warnings are fixed.
+
 ## [0.8.0] - 2026-11-04
 
 Eight experimental features.

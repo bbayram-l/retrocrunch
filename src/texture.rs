@@ -325,8 +325,8 @@ pub fn adjust(img: &mut RgbaImage, brightness: f32, contrast: f32, saturation: f
             *v = luma + (*v - luma) * sf;
             *v = (*v - 0.5) * cf + 0.5 + brightness;
         }
-        for i in 0..3 {
-            p.0[i] = (c[i] * 255.0).clamp(0.0, 255.0) as u8;
+        for (ch, v) in p.0.iter_mut().zip(c) {
+            *ch = (v * 255.0).clamp(0.0, 255.0) as u8;
         }
     }
 }

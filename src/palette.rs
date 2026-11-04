@@ -20,18 +20,29 @@ pub fn snap_rgb555(c: Rgb) -> Rgb {
 // Palettes are built and matched in Oklab (perceptually uniform: equal distances look
 // equally different), and dithered colours mix in linear light, as they do on screen.
 
+/// sRGB-encoded value (0..1) to linear light: the one copy of the transfer curve.
+#[inline]
+pub fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Linear light to an sRGB-encoded value (no clamping).
+#[inline]
+pub fn linear_to_srgb(c: f32) -> f32 {
+    if c <= 0.003_130_8 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
 fn linear_table() -> &'static [f32; 256] {
     static T: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
-    T.get_or_init(|| {
-        std::array::from_fn(|i| {
-            let c = i as f32 / 255.0;
-            if c <= 0.04045 {
-                c / 12.92
-            } else {
-                ((c + 0.055) / 1.055).powf(2.4)
-            }
-        })
-    })
+    T.get_or_init(|| std::array::from_fn(|i| srgb_to_linear(i as f32 / 255.0)))
 }
 
 /// sRGB bytes to linear light (0..1).
@@ -48,13 +59,9 @@ pub fn linear_to_srgb8(l: [f32; 3]) -> Rgb {
 
 fn from_linear(l: [f32; 3]) -> Rgb {
     l.map(|v| {
-        let v = v.clamp(0.0, 1.0);
-        let s = if v <= 0.003_130_8 {
-            v * 12.92
-        } else {
-            1.055 * v.powf(1.0 / 2.4) - 0.055
-        };
-        (s * 255.0).round().clamp(0.0, 255.0) as u8
+        (linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0)
+            .round()
+            .clamp(0.0, 255.0) as u8
     })
 }
 
