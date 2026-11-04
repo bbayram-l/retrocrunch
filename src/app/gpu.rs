@@ -89,6 +89,7 @@ uniform int u_has_ao;
 uniform vec3 u_eye;
 uniform vec3 u_key;
 uniform vec3 u_fill;
+uniform vec3 u_wire;
 out vec4 frag;
 
 const float PI = 3.14159265;
@@ -110,6 +111,10 @@ vec3 environment(vec3 d, float blur) {
 vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
 
 void main() {
+    if (u_mode == 3) { // wireframe pass
+        frag = vec4(u_wire, 1.0);
+        return;
+    }
     if (u_mode == 2) {
         frag = vec4(mix(u_bg_bottom, u_bg_top, gl_FragCoord.y / u_res.y), 1.0);
         return;
@@ -229,6 +234,8 @@ pub struct DrawParams {
     pub fog: Option<([f32; 3], f32, f32)>,
     pub bg_top: [f32; 3],
     pub bg_bottom: [f32; 3],
+    /// Edge colour for the wireframe overlay (0..1), None = off.
+    pub wireframe: Option<[f32; 3]>,
 }
 
 struct GpuMesh {
@@ -692,6 +699,28 @@ impl GpuState {
                 }
                 gl.bind_vertex_array(Some(m.vao));
                 gl.draw_elements(glow::TRIANGLES, m.count, glow::UNSIGNED_INT, 0);
+            }
+            // Wireframe: the same meshes as lines, pulled slightly towards the camera so
+            // they win the depth test against their own faces (hidden lines stay hidden).
+            if let Some(w) = p.wireframe {
+                gl.uniform_1_i32(u("u_mode").as_ref(), 3);
+                gl.uniform_3_f32(u("u_wire").as_ref(), w[0], w[1], w[2]);
+                gl.depth_func(glow::LEQUAL);
+                gl.enable(glow::POLYGON_OFFSET_LINE);
+                gl.polygon_offset(-1.0, -1.0);
+                gl.polygon_mode(glow::FRONT_AND_BACK, glow::LINE);
+                for m in &self.meshes {
+                    if p.cull_back && !m.double_sided {
+                        gl.enable(glow::CULL_FACE);
+                    } else {
+                        gl.disable(glow::CULL_FACE);
+                    }
+                    gl.bind_vertex_array(Some(m.vao));
+                    gl.draw_elements(glow::TRIANGLES, m.count, glow::UNSIGNED_INT, 0);
+                }
+                gl.polygon_mode(glow::FRONT_AND_BACK, glow::FILL);
+                gl.disable(glow::POLYGON_OFFSET_LINE);
+                gl.depth_func(glow::LESS);
             }
             gl.bind_vertex_array(None);
             gl.active_texture(glow::TEXTURE0);

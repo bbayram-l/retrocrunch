@@ -352,6 +352,43 @@ impl Model {
         self.rig.is_some() && (self.is_rigged() || self.pieces.iter().any(Piece::has_morphs))
     }
 
+    /// A copy posed at time `t` of `clip` (skinning and morph weights applied to the
+    /// positions). Without a rig or clip it's an unchanged copy.
+    pub fn posed(&self, clip: Option<usize>, t: f32) -> Model {
+        let mut m = self.clone();
+        let Some(rig) = self.rig.as_ref() else {
+            return m;
+        };
+        let Some(ci) = clip.filter(|&c| c < rig.clips.len()) else {
+            return m;
+        };
+        let mats = rig.skin_matrices(&rig.world(&rig.pose(Some(ci), t)));
+        for p in &mut m.pieces {
+            let weights = p
+                .morph_group
+                .and_then(|g| rig.morph_weights(Some(ci), t, g))
+                .unwrap_or_else(|| p.morph_weights.clone());
+            let base = p.morphed_positions(&weights);
+            let skin = p.skin.and_then(|s| mats.get(s));
+            for (v, b) in p.vertices.iter_mut().zip(base) {
+                v.pos = match skin {
+                    Some(mt) => crate::rig::skin_point(b, v.joints, v.weights, mt),
+                    None => b,
+                };
+            }
+        }
+        m
+    }
+
+    /// Clip index by name or number.
+    pub fn clip_index(&self, name: &str) -> Option<usize> {
+        let rig = self.rig.as_ref()?;
+        rig.clips
+            .iter()
+            .position(|c| c.name == name)
+            .or_else(|| name.parse::<usize>().ok().filter(|&i| i < rig.clips.len()))
+    }
+
     pub fn is_rigged(&self) -> bool {
         self.rig.as_ref().is_some_and(|r| !r.skins.is_empty())
             && self.pieces.iter().any(|p| p.skin.is_some())

@@ -27,6 +27,7 @@ pub mod scale;
 pub mod sprite;
 pub mod texture;
 pub mod visibility;
+pub mod vram;
 pub mod weights;
 
 #[cfg(test)]

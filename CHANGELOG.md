@@ -6,6 +6,25 @@ All notable changes to psx-forge. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-04
+
+### Added
+- **Wireframe** toggle in the viewport toolbar ("Wire"): visible edges only, jittered
+  with the mesh, on the OpenGL and CPU renderers. `render_preview` / `psx-forge preview`
+  take `wireframe` / `--wireframe`.
+- **View modes**: Shaded, Texture only (no baked lighting), Vertex lighting (AO, sun and
+  shadows only), Normals, and UV checker (texel density and stretching).
+- Experimental: **PS1 VRAM meter**. Every conversion reports how much of the 1 MB VRAM
+  its textures and CLUTs would take (4/8/16-bit packing, % of what's free next to two
+  320x240 framebuffers), with warnings past the 256x256 texture page or the VRAM size.
+  Shown in the viewport overlay and as `vram` in the JSON report.
+- Experimental: **sprite sheets**. Render a model from 8 (or N) directions, optionally
+  with a clip's frames, into a transparent sheet for Doom-style 2.5D billboards.
+  Export > Sprite sheet in the GUI, `psx-forge sprites`, MCP `render_sprites`.
+
+### Changed
+- `Model::posed` and `export::render_model` are shared by previews and sprite sheets.
+
 ## [0.6.0] - 2026-11-04
 
 ### Added

@@ -52,6 +52,9 @@ enum Cmd {
         #[arg(long)]
         save: Option<PathBuf>,
     },
+    /// Experimental: render a model from 8 (or N) directions, optionally animated, into a
+    /// transparent sprite sheet for 2.5D billboard characters.
+    Sprites(SpritesArgs),
     /// Palettes: the 10 built-ins, import from lospec.com, or browse the Lospec list.
     ///
     /// `psx-forge palettes` lists the built-ins (use as `--palette builtin:<slug>`).
@@ -293,6 +296,33 @@ struct PreviewArgs {
     /// ps1 (PlayStation look) or pbr (modern reference shading of the source).
     #[arg(long, default_value = "ps1")]
     shading: String,
+    /// Draw triangle edges on top.
+    #[arg(long)]
+    wireframe: bool,
+}
+
+/// Render 8-direction (Doom-style) billboard sprites of a model (experimental).
+#[derive(Args)]
+struct SpritesArgs {
+    input: PathBuf,
+    /// Output folder (sheet PNG + JSON layout).
+    #[arg(short, long, default_value = "psx_out")]
+    out: PathBuf,
+    #[arg(long, default_value_t = 8)]
+    directions: u32,
+    /// Cell size in pixels.
+    #[arg(long, default_value_t = 64)]
+    size: u32,
+    #[arg(long, default_value_t = 10.0)]
+    pitch: f32,
+    /// Animation clip name or index.
+    #[arg(long)]
+    clip: Option<String>,
+    #[arg(long, default_value_t = 8)]
+    frames: u32,
+    /// Clean rendering instead of the PS1 look.
+    #[arg(long)]
+    clean: bool,
 }
 
 #[derive(Args)]
@@ -501,6 +531,18 @@ fn main() -> Result<()> {
             ops::convert_model(&o, &progress)?
         }
         Some(Cmd::Inspect { path }) => ops::inspect_model(&path)?,
+        Some(Cmd::Sprites(a)) => ops::render_sprites(
+            &a.input,
+            &a.out,
+            &psx_forge::export::SpriteSheetJob {
+                directions: a.directions,
+                size: a.size,
+                pitch_degrees: a.pitch,
+                clip: a.clip,
+                frames: a.frames,
+                ps1: !a.clean,
+            },
+        )?,
         Some(Cmd::Palettes {
             lospec,
             save,
@@ -596,6 +638,7 @@ fn main() -> Result<()> {
                 clip: a.clip,
                 time: a.time,
                 shading: a.shading,
+                wireframe: a.wireframe,
                 output: Some(out.clone()),
             };
             let (mut v, _) = ops::render_preview(&job)?;

@@ -205,6 +205,8 @@ pub struct Stats {
     pub textures: Vec<(String, u32, u32, usize)>,
     /// Detail focus sources used ("head", "painted").
     pub focus: Vec<String>,
+    /// PS1 VRAM estimate for the textures (experimental).
+    pub vram: crate::vram::VramReport,
     pub warnings: Vec<String>,
 }
 
@@ -846,6 +848,7 @@ pub fn convert(
     stats.tris_after = out.tri_count();
     stats.verts_after = out.vertex_count();
     progress("Done", 1.0);
+    stats.vram = crate::vram::estimate(&stats.textures);
     Converted {
         model: out,
         palettes,

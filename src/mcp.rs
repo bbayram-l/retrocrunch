@@ -96,6 +96,7 @@ pub fn tools() -> Vec<Value> {
                 "clip": {"type": "string", "description": "Animation clip name or index"},
                 "time": {"type": "number", "description": "Seconds into the clip"},
                 "shading": {"type": "string", "enum": ["ps1", "pbr"], "description": "ps1 (default): PlayStation look. pbr: modern reference render of the source (metal/rough, normal maps, emission) to compare against"},
+                "wireframe": {"type": "boolean", "description": "Draw the visible triangle edges on top: judge topology, slivers and where the budget went"},
                 "output": {"type": "string", "description": "Also save the PNG here"}
             }),
             &["input"],
@@ -154,6 +155,21 @@ pub fn tools() -> Vec<Value> {
             "Extract an N-colour, 15-bit-snapped palette from an image (hex list), optionally saving .hex/.gpl/.pal so every asset can share it.",
             json!({"path": {"type": "string"}, "colors": {"type": "integer"}, "save": {"type": "string"}}),
             &["path"],
+        ),
+        tool(
+            "render_sprites",
+            "Experimental: render a model from N directions (default 8, Doom-style) and optionally N animation frames of a clip into one transparent sprite sheet, for 2.5D billboard characters. Writes <name>_sprites.png and a JSON layout (rows = directions, columns = frames) into output_dir.",
+            json!({
+                "input": {"type": "string"},
+                "output_dir": {"type": "string"},
+                "directions": {"type": "integer"},
+                "size": {"type": "integer", "description": "Cell size in pixels (default 64)"},
+                "pitch_degrees": {"type": "number"},
+                "clip": {"type": "string"},
+                "frames": {"type": "integer"},
+                "ps1": {"type": "boolean", "description": "PS1 look (default true) or clean"}
+            }),
+            &["input"],
         ),
         tool(
             "palettes",
@@ -284,6 +300,14 @@ pub fn call_tool(name: &str, args: &Value) -> Result<Vec<Value>> {
             ops::extract_palette(&str_arg(args, "path")?, colors, save.as_deref())?
         }
         "palettes" => palettes_tool(args)?,
+        "render_sprites" => {
+            let job: crate::export::SpriteSheetJob = serde_json::from_value(args.clone())?;
+            let out = args
+                .get("output_dir")
+                .and_then(Value::as_str)
+                .unwrap_or("psx_out");
+            ops::render_sprites(&str_arg(args, "input")?, std::path::Path::new(out), &job)?
+        }
         "blender_info" => ops::blender_info(),
         "list_presets" => ops::list_presets(),
         "blender_convert" => {

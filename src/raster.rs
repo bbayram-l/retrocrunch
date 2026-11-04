@@ -81,6 +81,9 @@ pub struct RasterOptions {
     #[serde(default)]
     pub pbr: bool,
     pub fog: Option<FogSettings>,
+    /// Draw triangle edges (hidden-line: only visible edges) in this colour.
+    #[serde(default)]
+    pub wireframe: Option<[u8; 3]>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -105,6 +108,7 @@ impl Default for RasterOptions {
             textured: true,
             pbr: false,
             fog: None,
+            wireframe: None,
         }
     }
 }
@@ -601,6 +605,17 @@ fn raster_tri(band: &mut Band, t: &Tri, o: &RasterOptions, lights: &Lights) {
     };
     let q = |inv_w: f32| (1.0 - aw) * inv_w + aw;
     let (qa, qb, qc) = (q(a.inv_w), q(b.inv_w), q(c.inv_w));
+    // Wireframe: barycentric weight -> distance in pixels to the opposite edge.
+    let edge_px = o.wireframe.map(|_| {
+        let len =
+            |p: &ScreenVert, q: &ScreenVert| ((p.x - q.x).powi(2) + (p.y - q.y).powi(2)).sqrt();
+        let a2 = area.abs();
+        [
+            a2 / len(b, c).max(1e-6),
+            a2 / len(c, a).max(1e-6),
+            a2 / len(a, b).max(1e-6),
+        ]
+    });
     for py in min_y..=max_y {
         let fy = py as f32 + 0.5;
         for px in min_x..=max_x {
@@ -614,6 +629,16 @@ fn raster_tri(band: &mut Band, t: &Tri, o: &RasterOptions, lights: &Lights) {
             let idx = ((py - band.y0) as u32 * band.w + px as u32) as usize;
             let z = w0 * a.z + w1 * b.z + w2 * c.z;
             if o.zbuffer && z >= band.depth[idx] {
+                continue;
+            }
+            if let (Some(wire), Some(e)) = (o.wireframe, edge_px)
+                && (w0 * e[0]).min(w1 * e[1]).min(w2 * e[2]) < 0.6
+            {
+                band.color[idx] = [wire[0], wire[1], wire[2], 255];
+                band.depth[idx] = z;
+                if o.write_ids {
+                    band.ids[idx] = t.id;
+                }
                 continue;
             }
             // Same blend as psx_common.gdshaderinc: q = 1 is affine, q = 1/w perspective-correct.
@@ -772,6 +797,43 @@ mod tests {
             normals: &[],
             pbr: None,
         }
+    }
+
+    #[test]
+    fn wireframe_draws_edges_and_the_diagonal_but_not_the_inside() {
+        let pos = [
+            Vec3::new(-1., -1., 0.),
+            Vec3::new(1., -1., 0.),
+            Vec3::new(1., 1., 0.),
+            Vec3::new(-1., 1., 0.),
+        ];
+        let cam = OrbitCamera {
+            yaw: 0.0,
+            pitch: 0.0,
+            distance: 3.0,
+            ..Default::default()
+        };
+        let wire = [255, 0, 255];
+        let o = RasterOptions {
+            wireframe: Some(wire),
+            ..RasterOptions::clean()
+        };
+        let mut f = Frame::new(64, 64);
+        f.clear([0, 0, 0, 255]);
+        render(
+            &mut f,
+            cam.view(),
+            cam.proj(1.0),
+            &[quad_call(&pos, &[0, 1, 2, 0, 2, 3])],
+            &o,
+        );
+        let at = |x: u32, y: u32| f.color[(y * 64 + x) as usize];
+        let wired = f.color.iter().filter(|c| c[..3] == wire).count();
+        assert!(wired > 64, "edges drawn: {wired}");
+        // The shared diagonal (bottom-left to top-right) runs through the centre.
+        assert!((30..34).any(|d| at(d, 63 - d)[..3] == wire || at(d, 64 - d)[..3] == wire));
+        // Inside a triangle, away from every edge: shaded, not wire.
+        assert_ne!(at(40, 40)[..3], wire);
     }
 
     #[test]

@@ -23,7 +23,9 @@ Check it with the `blender_info` tool or `psx-forge blender status`.
    written files, before/after stats, palettes and warnings. Read `warnings`: a budget
    below the rig minimum is flagged there.
 3. `render_preview {input: <the .glb from step 2>, yaw_degrees, clip?, time?}` returns
-   a PS1-style render as an image. **Look at it** before reporting success. Pose rigged
+   a PS1-style render as an image. **Look at it** before reporting success. Pass
+   `wireframe: true` to see the triangles (slivers, where the budget went). The convert
+   report's `vram` estimates PS1 VRAM use (experimental). Pose rigged
    or morph models with `clip` and `time` to check deformation.
 4. Adjust and repeat. Typical knobs:
    - Silhouette too blocky: raise `tris`.
@@ -84,6 +86,12 @@ Ready-made palettes: `palettes {}` lists 10 built-ins (PICO-8, Sweetie 16, DawnB
 
 Every export also writes `IMPORT_NOTES.txt` with engine-specific import steps, plus a
 320x240 `_preview.png`.
+
+## Sprite sheets (experimental)
+
+`render_sprites {input, output_dir, directions: 8, size: 64, clip: "Walk", frames: 8}`
+renders a converted model into a transparent sheet (rows = directions, columns = frames)
+plus a JSON layout, for 2.5D billboard characters.
 
 ## Levels
 

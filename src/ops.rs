@@ -264,6 +264,7 @@ pub fn convert_model(o: &ModelOptions, progress: process::Progress) -> Result<Va
             "subdivided_added": c.stats.subdivided_added,
             "atlas": c.stats.atlas.map(|(n, charts)| json!({"size": n, "charts": charts})),
             "focus": c.stats.focus,
+            "vram": c.stats.vram,
             "recommended_min_tris": c.stats.recommended_min_tris,
             "textures": c.stats.textures.iter().map(|t| json!({"material": t.0, "width": t.1, "height": t.2, "colors": t.3})).collect::<Vec<_>>(),
         },
@@ -742,6 +743,8 @@ pub struct PreviewJob {
     pub time: f32,
     /// "ps1" (default: the PlayStation look) or "pbr" (modern reference shading).
     pub shading: String,
+    /// Draw triangle edges on top (judge topology and the triangle budget).
+    pub wireframe: bool,
     pub output: Option<PathBuf>,
 }
 
@@ -755,6 +758,7 @@ impl Default for PreviewJob {
             clip: None,
             time: 0.0,
             shading: "ps1".into(),
+            wireframe: false,
             output: None,
         }
     }
@@ -764,43 +768,28 @@ impl Default for PreviewJob {
 pub fn render_preview(o: &PreviewJob) -> Result<(Value, Vec<u8>)> {
     let mut model = Model::load(&o.input)?;
     let mut posed = Value::Null;
-    if let (Some(name), Some(rig)) = (&o.clip, model.rig.clone()) {
-        let clip = rig
-            .clips
-            .iter()
-            .position(|c| &c.name == name)
-            .or_else(|| name.parse::<usize>().ok().filter(|&i| i < rig.clips.len()));
-        let Some(ci) = clip else {
+    if let (Some(name), true) = (&o.clip, model.rig.is_some()) {
+        let Some(ci) = model.clip_index(name) else {
             bail!("clip '{name}' not found")
         };
-        let mats = rig.skin_matrices(&rig.world(&rig.pose(Some(ci), o.time)));
-        for p in &mut model.pieces {
-            let weights = p
-                .morph_group
-                .and_then(|g| rig.morph_weights(Some(ci), o.time, g))
-                .unwrap_or_else(|| p.morph_weights.clone());
-            let base = p.morphed_positions(&weights);
-            let skin = p.skin.and_then(|s| mats.get(s));
-            for (v, b) in p.vertices.iter_mut().zip(base) {
-                v.pos = match skin {
-                    Some(m) => crate::rig::skin_point(b, v.joints, v.weights, m),
-                    None => b,
-                };
-            }
-        }
-        posed = json!({"clip": rig.clips[ci].name, "time": o.time});
+        model = model.posed(Some(ci), o.time);
+        posed =
+            json!({"clip": model.rig.as_ref().map(|r| r.clips[ci].name.clone()), "time": o.time});
     }
     let pbr = match o.shading.to_ascii_lowercase().as_str() {
         "ps1" | "psx" => false,
         "pbr" | "reference" => true,
         other => bail!("unknown shading '{other}' (ps1, pbr)"),
     };
-    let img = export::preview_image_shaded(
+    let mut view = export::RenderView::preview(o.yaw_degrees.to_radians(), pbr);
+    if o.wireframe {
+        view.opts.wireframe = Some([96, 236, 214]);
+    }
+    let img = export::render_model(
         &model,
         o.width.clamp(16, 1920),
         o.height.clamp(16, 1080),
-        o.yaw_degrees.to_radians(),
-        pbr,
+        &view,
     );
     let mut png = Vec::new();
     img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)?;
@@ -833,6 +822,36 @@ pub fn extract_palette(path: &Path, colors: usize, save: Option<&Path>) -> Resul
     Ok(
         json!({"colors": pal.iter().map(|c| format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])).collect::<Vec<_>>(), "saved": save.map(|s| s.display().to_string())}),
     )
+}
+
+/// Experimental: N-direction (x animation frame) billboard sprite sheet of a model.
+/// Writes `<name>_sprites.png` and `<name>_sprites.json` (layout) into `out_dir`.
+pub fn render_sprites(input: &Path, out_dir: &Path, job: &export::SpriteSheetJob) -> Result<Value> {
+    let model = Model::load(input)?;
+    let (sheet, info) = export::sprite_sheet(&model, job)?;
+    std::fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
+    let stem = input
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("model");
+    let png = out_dir.join(format!("{stem}_sprites.png"));
+    sheet
+        .save(&png)
+        .with_context(|| format!("writing {}", png.display()))?;
+    let meta = out_dir.join(format!("{stem}_sprites.json"));
+    let layout = json!({
+        "image": png.file_name().and_then(|n| n.to_str()),
+        "layout": info,
+        "rows": "directions (row 0 faces the camera, then counter-clockwise seen from above)",
+        "columns": "animation frames",
+    });
+    std::fs::write(&meta, serde_json::to_string_pretty(&layout)?)?;
+    Ok(json!({
+        "files": [png.display().to_string(), meta.display().to_string()],
+        "width": sheet.width(),
+        "height": sheet.height(),
+        "layout": info,
+    }))
 }
 
 fn palette_json(p: &crate::lospec::LospecPalette) -> Value {

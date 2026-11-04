@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 
 enum JobResult {
     Loaded(anyhow::Result<Model>),
-    Converted(Converted),
+    Converted(Box<Converted>),
 }
 
 struct Job {
@@ -73,6 +73,8 @@ pub struct ModelTab {
     /// Face focus heat map and the detail brush.
     #[serde(skip)]
     detail: DetailEditor,
+    /// Sprite sheet settings (experimental).
+    pub sprites: psx_forge::export::SpriteSheetJob,
     #[serde(skip)]
     rig_min_tris: usize,
     #[serde(skip)]
@@ -146,6 +148,7 @@ impl Default for ModelTab {
             pose_world: Vec::new(),
             rig: RigEditor::default(),
             detail: DetailEditor::default(),
+            sprites: Default::default(),
             rig_min_tris: 0,
         }
     }
@@ -203,7 +206,7 @@ impl ModelTab {
                 }
             };
             let c = process::convert(&src, &pieces, &settings, palette.as_deref(), &report);
-            let _ = tx.send(JobResult::Converted(c));
+            let _ = tx.send(JobResult::Converted(Box::new(c)));
         });
         self.job = Some(Job { rx, progress });
     }
@@ -295,7 +298,7 @@ impl ModelTab {
                         } else {
                             self.tex_preview.clear();
                         }
-                        self.converted = Some(Arc::new(c));
+                        self.converted = Some(Arc::new(*c));
                         self.posed = None;
                     }
                 }
@@ -1344,7 +1347,65 @@ impl ModelTab {
             {
                 self.export_dialog(sh);
             }
+            ui.add_space(6.0);
+            ui.collapsing("Sprite sheet (experimental)", |ui| {
+                hint(
+                    ui,
+                    "Render the converted model from 8 directions (Doom-style 2.5D billboards), with the selected clip's frames as columns. Transparent PNG + JSON layout.",
+                );
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut self.sprites.directions).range(1..=32).suffix(" dirs"));
+                    ui.add(egui::DragValue::new(&mut self.sprites.size).range(8..=512).suffix(" px"));
+                    ui.add(egui::DragValue::new(&mut self.sprites.frames).range(1..=64).suffix(" frames"));
+                    ui.checkbox(&mut self.sprites.ps1, "PS1 look");
+                });
+                if ui
+                    .add_enabled(ready, egui::Button::new("Render sprite sheet..."))
+                    .clicked()
+                {
+                    self.sprite_dialog(sh);
+                }
+            });
         });
+    }
+
+    fn sprite_dialog(&mut self, sh: &mut Shared) {
+        let Some(c) = self.converted.clone() else {
+            return;
+        };
+        let Some(dir) = rfd::FileDialog::new()
+            .set_title("Folder for the sprite sheet")
+            .pick_folder()
+        else {
+            return;
+        };
+        let mut job = self.sprites.clone();
+        job.clip = self
+            .anim_clip
+            .and_then(|i| c.model.rig.as_ref().and_then(|r| r.clips.get(i)))
+            .map(|clip| clip.name.clone());
+        match psx_forge::export::sprite_sheet(&c.model, &job) {
+            Ok((sheet, info)) => {
+                let png = dir.join(format!("{}_sprites.png", c.model.name));
+                let meta = dir.join(format!("{}_sprites.json", c.model.name));
+                let res = sheet.save(&png).map_err(anyhow::Error::from).and_then(|_| {
+                    std::fs::write(&meta, serde_json::to_string_pretty(&info)?)?;
+                    Ok(())
+                });
+                match res {
+                    Ok(()) => {
+                        sh.status = format!(
+                            "Sprite sheet: {} directions x {} frames -> {}",
+                            info.directions,
+                            info.frames,
+                            png.display()
+                        )
+                    }
+                    Err(e) => sh.error = Some(format!("{e:#}")),
+                }
+            }
+            Err(e) => sh.error = Some(format!("{e:#}")),
+        }
     }
 
     fn export_dialog(&mut self, sh: &mut Shared) {
@@ -1511,6 +1572,12 @@ impl ModelTab {
                     .first()
                     .map(|t| format!("{}x{}  {} colours", t.1, t.2, t.3))
                     .unwrap_or_default(),
+                // Experimental: what the textures would cost on a real PS1.
+                if c.stats.vram.textures.is_empty() {
+                    String::new()
+                } else {
+                    c.stats.vram.summary()
+                },
             ];
             for (k, l) in lines.iter().enumerate() {
                 painter.text(
@@ -1521,9 +1588,15 @@ impl ModelTab {
                     ACCENT2,
                 );
             }
-            for (k, w) in c.stats.warnings.iter().enumerate() {
+            for (k, w) in c
+                .stats
+                .warnings
+                .iter()
+                .chain(&c.stats.vram.warnings)
+                .enumerate()
+            {
                 painter.text(
-                    info.rect.left_top() + egui::vec2(8.0, 44.0 + k as f32 * 16.0),
+                    info.rect.left_top() + egui::vec2(8.0, 60.0 + k as f32 * 16.0),
                     egui::Align2::LEFT_TOP,
                     w,
                     egui::FontId::proportional(12.0),

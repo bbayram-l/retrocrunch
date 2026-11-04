@@ -116,6 +116,133 @@ impl ResMode {
     }
 }
 
+/// What the viewport colours surfaces with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ViewMode {
+    #[default]
+    Shaded,
+    /// Texture (or base colour) without vertex lighting.
+    Unlit,
+    /// Vertex colours only: baked lighting and AO, no texture.
+    Lighting,
+    /// Normals as colours (flipped or broken normals stand out).
+    Normals,
+    /// A checker through the UVs: texel density and stretching.
+    UvChecker,
+}
+
+impl ViewMode {
+    pub const ALL: [ViewMode; 5] = [
+        Self::Shaded,
+        Self::Unlit,
+        Self::Lighting,
+        Self::Normals,
+        Self::UvChecker,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Shaded => "Shaded",
+            Self::Unlit => "Texture only",
+            Self::Lighting => "Vertex lighting",
+            Self::Normals => "Normals",
+            Self::UvChecker => "UV checker",
+        }
+    }
+    fn tooltip(self) -> &'static str {
+        match self {
+            Self::Shaded => "Texture x vertex lighting, as exported",
+            Self::Unlit => "Texture or base colour without the baked vertex lighting",
+            Self::Lighting => "Only the vertex colours: baked AO, sun and shadows",
+            Self::Normals => "Vertex normals as RGB (X red, Y green, Z blue)",
+            Self::UvChecker => {
+                "Checker through the UVs: uneven squares mean uneven texel density, skewed ones mean stretching"
+            }
+        }
+    }
+}
+
+/// Edge colour of the wireframe overlay.
+const WIRE: [u8; 3] = [96, 236, 214];
+
+/// A copy of `s` coloured for `mode` (flat shading, no materials).
+fn view_variant(s: &RenderScene, mode: ViewMode) -> RenderScene {
+    let checker = (mode == ViewMode::UvChecker).then(|| {
+        // 32x32 cells: fine enough to compare texel density between atlas charts.
+        RgbaImage::from_fn(256, 256, |x, y| {
+            let (cx, cy) = (x / 8, y / 8);
+            let v = if (cx + cy) % 2 == 0 { 210.0 } else { 80.0 };
+            // Red grows along U, blue along V, so orientation and mirroring show.
+            let r = v * (0.55 + 0.45 * cx as f32 / 31.0);
+            let b = v * (0.55 + 0.45 * cy as f32 / 31.0);
+            image::Rgba([r as u8, (v * 0.8) as u8, b as u8, 255])
+        })
+    });
+    let pieces = s
+        .pieces
+        .iter()
+        .map(|p| {
+            let n = p.positions.len();
+            let base = p
+                .material
+                .and_then(|m| s.materials.get(m))
+                .map_or([1.0; 4], |m| m.base_color);
+            let (colors, texture) = match mode {
+                ViewMode::Shaded => (p.colors.clone(), p.texture),
+                ViewMode::Unlit => (
+                    vec![if p.texture.is_some() { [1.0; 4] } else { base }; n],
+                    p.texture,
+                ),
+                ViewMode::Lighting => (
+                    if p.vertex_colors.len() == n {
+                        p.vertex_colors.clone()
+                    } else {
+                        p.colors.clone()
+                    },
+                    None,
+                ),
+                ViewMode::Normals => (
+                    (0..n)
+                        .map(|i| {
+                            let v = p
+                                .normals
+                                .get(i)
+                                .copied()
+                                .unwrap_or(Vec3::Y)
+                                .normalize_or(Vec3::Y);
+                            [v.x * 0.5 + 0.5, v.y * 0.5 + 0.5, v.z * 0.5 + 0.5, 1.0]
+                        })
+                        .collect(),
+                    None,
+                ),
+                ViewMode::UvChecker => (vec![[1.0; 4]; n], (p.uvs.len() == n).then_some(0)),
+            };
+            RenderPiece {
+                positions: p.positions.clone(),
+                uvs: p.uvs.clone(),
+                vertex_colors: colors.clone(),
+                colors,
+                indices: p.indices.clone(),
+                texture,
+                double_sided: p.double_sided,
+                normals: p.normals.clone(),
+                material: None,
+            }
+        })
+        .collect();
+    RenderScene {
+        pieces,
+        textures: match (mode, checker) {
+            (_, Some(c)) => vec![Some(c)],
+            (ViewMode::Unlit, _) => s.textures.clone(),
+            _ => Vec::new(),
+        },
+        materials: Vec::new(),
+        lo: s.lo,
+        hi: s.hi,
+        generation: s.generation.wrapping_mul(31) ^ ((mode as u64 + 1) << 56),
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Controls {
     /// LMB orbit, RMB/MMB or Shift+LMB pan.
@@ -136,6 +263,11 @@ pub struct Viewport {
     pub bg_bottom: [u8; 3],
     /// Render with OpenGL when available (falls back to the CPU rasterizer).
     pub gpu: bool,
+    /// Draw triangle edges over the model.
+    pub wireframe: bool,
+    pub view: ViewMode,
+    #[serde(skip)]
+    variant: Option<((u64, ViewMode), RenderScene)>,
     #[serde(skip)]
     gpu_state: SharedGpu,
     #[serde(skip)]
@@ -157,6 +289,9 @@ impl Default for Viewport {
             bg_top: [0x20, 0x1c, 0x3a],
             bg_bottom: [0x06, 0x06, 0x0c],
             gpu: true,
+            wireframe: false,
+            view: ViewMode::Shaded,
+            variant: None,
             gpu_state: SharedGpu::default(),
             tex: TexSlot::default(),
             last_key: String::new(),
@@ -237,6 +372,18 @@ impl Viewport {
             ui.toggle_value(&mut self.opts.textured, "Textures");
             ui.toggle_value(&mut self.fog, "Fog");
             ui.toggle_value(&mut self.turntable, "Turntable");
+            ui.separator();
+            ui.toggle_value(&mut self.wireframe, "Wire")
+                .on_hover_text("Show triangle edges (only visible ones; they jitter with the mesh)");
+            egui::ComboBox::from_id_salt(ui.id().with("view"))
+                .selected_text(self.view.label())
+                .width(110.0)
+                .show_ui(ui, |ui| {
+                    for m in ViewMode::ALL {
+                        ui.selectable_value(&mut self.view, m, m.label())
+                            .on_hover_text(m.tooltip());
+                    }
+                });
             if GPU_AVAILABLE.load(Ordering::Relaxed) {
                 let err = self.gpu_error();
                 let r = ui.toggle_value(&mut self.gpu, "GPU");
@@ -261,6 +408,27 @@ impl Viewport {
     }
 
     pub fn show(
+        &mut self,
+        ui: &mut Ui,
+        scene: Option<&RenderScene>,
+        controls: Controls,
+        extra: &[RenderPiece],
+        reference: bool,
+    ) -> ViewInfo {
+        let Some(s) = scene.filter(|_| self.view != ViewMode::Shaded) else {
+            return self.show_scene(ui, scene, controls, extra, reference);
+        };
+        let key = (s.generation, self.view);
+        let variant = match self.variant.take() {
+            Some((k, v)) if k == key => v,
+            _ => view_variant(s, self.view),
+        };
+        let info = self.show_scene(ui, Some(&variant), controls, extra, reference);
+        self.variant = Some((key, variant));
+        info
+    }
+
+    fn show_scene(
         &mut self,
         ui: &mut Ui,
         scene: Option<&RenderScene>,
@@ -314,7 +482,7 @@ impl Viewport {
             serde_json::to_string(&self.opts).unwrap_or_default(),
             scene.map_or(0, |s| s.generation),
             self.fog,
-            (extra.len(), reference)
+            (extra.len(), reference, self.wireframe)
         );
         if key != self.last_key || self.frame_size != (fw, fh) || self.tex.handle.is_none() {
             self.last_key = key;
@@ -358,6 +526,7 @@ impl Viewport {
         } else {
             self.opts.clone()
         };
+        opts.wireframe = self.wireframe.then_some(WIRE);
         if self.fog && !reference {
             let d = self.cam.distance;
             opts.fog = Some(FogSettings {
@@ -423,6 +592,7 @@ impl Viewport {
             fog: o.fog.map(|f| (f.color.map(|v| v as f32), f.start, f.end)),
             bg_top: f(self.bg_top),
             bg_bottom: f(self.bg_bottom),
+            wireframe: o.wireframe.map(|c| c.map(|v| v as f32 / 255.0)),
         };
         let state = self.gpu_state.clone();
         let ctx = ui.ctx().clone();
