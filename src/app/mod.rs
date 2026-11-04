@@ -270,7 +270,7 @@ impl RetrocrunchApp {
                 ui.checkbox(&mut self.prefs.dark, "Dark theme");
             });
             ui.menu_button("Help", |ui| {
-                if ui.button("About retrocrunch").clicked() {
+                if ui.button("About Retrocrunch").clicked() {
                     ui.close_menu();
                     self.show_about = true;
                 }
@@ -523,6 +523,29 @@ impl RetrocrunchApp {
                         RichText::new("Also usable from the command line: retrocrunch --help")
                             .color(DIM),
                     );
+                    ui.separator();
+                    ui.label(
+                        "Free to use. If it saves you time, you can pay what you want on itch.io.",
+                    );
+                    ui.horizontal(|ui| {
+                        ui.hyperlink_to(
+                            "Download and updates",
+                            "https://laegh.itch.io/retrocrunch",
+                        );
+                        ui.label(RichText::new("·").color(DIM));
+                        ui.hyperlink_to("Source code", "https://github.com/bbayram-l/retrocrunch");
+                    });
+                    ui.separator();
+                    ui.label("Everything Retrocrunch creates is yours, commercial games included.");
+                    ui.label(
+                        RichText::new(
+                            "Retrocrunch is source-available under PolyForm Shield 1.0.0: \
+                             don't resell or redistribute it. Open-source libraries: \
+                             THIRD_PARTY_LICENSES.html.",
+                        )
+                        .color(DIM),
+                    );
+                    ui.label(RichText::new("© 2026 Burak Bayram").color(DIM));
                 });
             self.show_about = open;
         }

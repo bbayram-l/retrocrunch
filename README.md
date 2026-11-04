@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version 0.8.0" src="https://img.shields.io/badge/version-0.8.0-f0468c?style=flat-square&labelColor=1a1530">
+  <img alt="Version 0.9.0" src="https://img.shields.io/badge/version-0.9.0-f0468c?style=flat-square&labelColor=1a1530">
   <img alt="Built with Rust" src="https://img.shields.io/badge/built%20with-Rust-ffc45a?style=flat-square&labelColor=1a1530">
   <img alt="Godot 4 ready" src="https://img.shields.io/badge/Godot-4-78e6dc?style=flat-square&labelColor=1a1530">
   <img alt="MCP server for AI agents" src="https://img.shields.io/badge/MCP-agents-9a8cc8?style=flat-square&labelColor=1a1530">

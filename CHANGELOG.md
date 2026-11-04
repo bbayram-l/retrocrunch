@@ -6,6 +6,10 @@ All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format fo
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-04
+
+First release as Retrocrunch, and the first ready-built release on itch.io.
+
 ### Added
 - Licence: PolyForm Shield 1.0.0 (source-available; use Retrocrunch for anything,
   including commercial games, but don't sell or redistribute it). Converted output is
@@ -22,6 +26,8 @@ All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format fo
   unchanged.
 - New README with art rendered by Retrocrunch itself (`tools/readme-art/` rebuilds it);
   the full reference moved to `docs/GUIDE.md`.
+- Help > About links the itch.io download page and the source code, and shows the
+  licence.
 - Internal clean-up, no behaviour change (41 reference outputs byte-identical):
   `export`, `mesh` and the Model tab are split into focused modules, one copy of the
   sRGB transfer curve is shared by the rasterizer, palettes and CRT pass, and the
