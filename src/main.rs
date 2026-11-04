@@ -52,6 +52,32 @@ enum Cmd {
         #[arg(long)]
         save: Option<PathBuf>,
     },
+    /// Palettes: the 10 built-ins, import from lospec.com, or browse the Lospec list.
+    ///
+    /// `psx-forge palettes` lists the built-ins (use as `--palette builtin:<slug>`).
+    /// `psx-forge palettes pico-8 --save pico8.gpl` imports one (also into the app's library).
+    /// `psx-forge palettes --tag horror --colors 16 --count max` browses Lospec.
+    Palettes {
+        /// Lospec slug or URL to import.
+        lospec: Option<String>,
+        /// Also write the imported palette here (.gpl/.hex/.pal).
+        #[arg(long)]
+        save: Option<PathBuf>,
+        /// Browse the Lospec list by tag (horror, gameboy, nes, ...).
+        #[arg(long)]
+        tag: Option<String>,
+        /// Colour count for --count.
+        #[arg(long)]
+        colors: Option<usize>,
+        /// any, max, min or exact.
+        #[arg(long, default_value = "any")]
+        count: String,
+        /// default, downloads, newest or alphabetical.
+        #[arg(long, default_value = "default")]
+        sort: String,
+        #[arg(long, default_value_t = 0)]
+        page: usize,
+    },
     /// Blender bridge: status, or convert any Blender-readable file to GLB/FBX.
     Blender {
         #[command(subcommand)]
@@ -109,7 +135,10 @@ enum PalMode {
 enum Dither {
     Off,
     Bayer,
+    Bayer8,
     Ps1,
+    /// Floyd-Steinberg error diffusion.
+    Floyd,
 }
 
 #[derive(Args, Clone)]
@@ -151,6 +180,8 @@ impl From<&TexOpts> for TextureOptions {
                 Dither::Off => "off",
                 Dither::Bayer => "bayer",
                 Dither::Ps1 => "ps1",
+                Dither::Bayer8 => "bayer8",
+                Dither::Floyd => "floyd",
             }
             .into(),
             dither_amount: t.dither_amount,
@@ -470,6 +501,62 @@ fn main() -> Result<()> {
             ops::convert_model(&o, &progress)?
         }
         Some(Cmd::Inspect { path }) => ops::inspect_model(&path)?,
+        Some(Cmd::Palettes {
+            lospec,
+            save,
+            tag,
+            colors,
+            count,
+            sort,
+            page,
+        }) => {
+            let v = if let Some(slug) = lospec {
+                ops::lospec_import(&slug, save.as_deref(), true)?
+            } else if tag.is_some()
+                || colors.is_some()
+                || page > 0
+                || count != "any"
+                || sort != "default"
+            {
+                let mut args = serde_json::json!({"tag": tag.unwrap_or_default(), "count": count, "sort": sort, "page": page});
+                if let Some(c) = colors {
+                    args["colors"] = serde_json::json!(c);
+                }
+                psx_forge::mcp::call_palettes(&args)?
+            } else {
+                ops::builtin_palettes()
+            };
+            if !json {
+                for p in v["palettes"].as_array().into_iter().flatten() {
+                    println!(
+                        "{:<16} {:<16} {:>3} colours  {}",
+                        p["slug"].as_str().unwrap_or(""),
+                        p["name"].as_str().unwrap_or(""),
+                        p["colors"].as_array().map_or(0, Vec::len),
+                        p["author"].as_str().unwrap_or("")
+                    );
+                }
+                if let Some(t) = v["total"].as_u64() {
+                    println!("page {} of {} palettes", page, t);
+                }
+                if v["palettes"].is_null() {
+                    println!(
+                        "Imported {} ({} colours){}{}",
+                        v["name"].as_str().unwrap_or(""),
+                        v["colors"].as_array().map_or(0, Vec::len),
+                        v["author"]
+                            .as_str()
+                            .filter(|a| !a.is_empty())
+                            .map_or(String::new(), |a| format!(" by {a}")),
+                        v["library"]
+                            .as_str()
+                            .map_or(String::new(), |p| format!(" -> {p}"))
+                    );
+                }
+                return Ok(());
+            }
+            v
+        }
         Some(Cmd::Presets) => {
             let plain =
                 |v: &serde_json::Value| v.as_str().map_or_else(|| v.to_string(), String::from);

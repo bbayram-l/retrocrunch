@@ -14,6 +14,7 @@ pub mod decimate;
 pub mod detail;
 pub mod export;
 pub mod fbx;
+pub mod lospec;
 pub mod mcp;
 pub mod mesh;
 pub mod ops;
@@ -27,3 +28,17 @@ pub mod sprite;
 pub mod texture;
 pub mod visibility;
 pub mod weights;
+
+#[cfg(test)]
+mod version_tests {
+    /// The changelog must have an entry for the crate version (bump both together).
+    #[test]
+    fn changelog_lists_the_crate_version() {
+        let log = include_str!("../CHANGELOG.md");
+        let entry = format!("## [{}]", env!("CARGO_PKG_VERSION"));
+        assert!(
+            log.contains(&entry),
+            "CHANGELOG.md has no '{entry}' section"
+        );
+    }
+}

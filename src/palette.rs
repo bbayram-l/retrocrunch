@@ -41,6 +41,11 @@ pub fn to_linear(c: Rgb) -> [f32; 3] {
     [t[c[0] as usize], t[c[1] as usize], t[c[2] as usize]]
 }
 
+/// Linear light (0..1) to sRGB bytes.
+pub fn linear_to_srgb8(l: [f32; 3]) -> Rgb {
+    from_linear(l)
+}
+
 fn from_linear(l: [f32; 3]) -> Rgb {
     l.map(|v| {
         let v = v.clamp(0.0, 1.0);
@@ -114,13 +119,69 @@ fn nearest_two(lab: &[f32; 3], labs: &[[f32; 3]]) -> (usize, usize) {
     if d2 == f32::MAX { (b1, b1) } else { (b1, b2) }
 }
 
+/// Mixing proportion (0..1) of `q` into `p` that best reproduces `x`, in linear light
+/// with luminance weights (green matters most to the eye).
+#[inline]
+fn mix_amount(x: &[f32; 3], p: &[f32; 3], q: &[f32; 3]) -> f32 {
+    const W: [f32; 3] = [0.2126, 0.7152, 0.0722];
+    let (mut num, mut den) = (0.0, 0.0);
+    for k in 0..3 {
+        let d = q[k] - p[k];
+        num += W[k] * (x[k] - p[k]) * d;
+        den += W[k] * d * d;
+    }
+    if den <= 1e-12 {
+        0.0
+    } else {
+        (num / den).clamp(0.0, 1.0)
+    }
+}
+
+/// The palette entry that dithers best with `nearest` towards the colour `x`.
+fn best_partner(
+    x: &[f32; 3],
+    x_lab: &[f32; 3],
+    nearest: usize,
+    labs: &[[f32; 3]],
+    linear: &[[f32; 3]],
+) -> usize {
+    let p = &linear[nearest];
+    let mut best = (nearest, f32::MAX);
+    for (j, q) in linear.iter().enumerate() {
+        if j == nearest {
+            continue;
+        }
+        let t = mix_amount(x, p, q);
+        if t <= 0.0 {
+            continue;
+        }
+        let mixed = [
+            p[0] + (q[0] - p[0]) * t,
+            p[1] + (q[1] - p[1]) * t,
+            p[2] + (q[2] - p[2]) * t,
+        ];
+        let d =
+            lab_dist(x_lab, &oklab_from_linear(mixed)) + lab_dist(&labs[nearest], &labs[j]) * 0.1;
+        if d < best.1 {
+            best = (j, d);
+        }
+    }
+    best.0
+}
+
 pub fn nearest_index(c: Rgb, palette: &[Rgb]) -> usize {
     let labs: Vec<[f32; 3]> = palette.iter().map(|&p| oklab(p)).collect();
     nearest_two(&oklab(c), &labs).0
 }
 
-/// 32x32x32 lookup table mapping RGB555 cells to their nearest two palette entries
-/// (Oklab). Makes per-pixel palette mapping O(1) instead of O(palette).
+/// 32x32x32 lookup table mapping RGB555 cells to their nearest palette entry (Oklab)
+/// and the entry it dithers best with. Makes per-pixel mapping O(1).
+///
+/// The dithering partner isn't simply the second-nearest colour, which often lies in
+/// the wrong direction: every entry is tried, mixed with the nearest one in the
+/// proportion that best reproduces the cell's colour, and scored by how close that mix
+/// lands plus a tenth of the distance between the two (far-apart pairs make noisy
+/// dither). The same idea as Aseprite's ordered dithering, reimplemented here.
 pub struct PaletteLut {
     table: Vec<(u8, u8)>,
     linear: Vec<[f32; 3]>,
@@ -130,20 +191,35 @@ impl PaletteLut {
     pub fn new(palette: &[Rgb]) -> Self {
         assert!(!palette.is_empty() && palette.len() <= 256);
         let labs: Vec<[f32; 3]> = palette.iter().map(|&p| oklab(p)).collect();
+        let linear: Vec<[f32; 3]> = palette.iter().map(|&p| to_linear(p)).collect();
         let mut table = vec![(0u8, 0u8); 32 * 32 * 32];
-        for r in 0..32u32 {
-            for g in 0..32u32 {
-                for b in 0..32u32 {
-                    let c = [(r << 3 | 4) as u8, (g << 3 | 4) as u8, (b << 3 | 4) as u8];
-                    let (i, j) = nearest_two(&oklab(c), &labs);
-                    table[((r << 10) | (g << 5) | b) as usize] = (i as u8, j as u8);
-                }
+        // Cells are independent: split the red axis over the cores.
+        let threads = std::thread::available_parallelism()
+            .map_or(4, |n| n.get())
+            .min(32);
+        let per = 32usize.div_ceil(threads);
+        std::thread::scope(|scope| {
+            for (k, chunk) in table.chunks_mut(per * 1024).enumerate() {
+                let (labs, linear) = (&labs, &linear);
+                scope.spawn(move || {
+                    for (n, slot) in chunk.iter_mut().enumerate() {
+                        let cell = k * per * 1024 + n;
+                        let c = [
+                            ((cell >> 10) << 3 | 4) as u8,
+                            ((cell >> 5 & 31) << 3 | 4) as u8,
+                            ((cell & 31) << 3 | 4) as u8,
+                        ];
+                        let lab = oklab(c);
+                        let i = nearest_two(&lab, labs).0;
+                        *slot = (
+                            i as u8,
+                            best_partner(&to_linear(c), &lab, i, labs, linear) as u8,
+                        );
+                    }
+                });
             }
-        }
-        Self {
-            table,
-            linear: palette.iter().map(|&p| to_linear(p)).collect(),
-        }
+        });
+        Self { table, linear }
     }
 
     #[inline]
@@ -166,18 +242,11 @@ impl PaletteLut {
         if i == j || strength <= 0.0 {
             return i;
         }
-        let (p, q, x) = (
-            self.linear[i as usize],
-            self.linear[j as usize],
-            to_linear(c),
+        let mix = mix_amount(
+            &to_linear(c),
+            &self.linear[i as usize],
+            &self.linear[j as usize],
         );
-        let d = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
-        let len2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-        if len2 <= 1e-12 {
-            return i;
-        }
-        let mix = (((x[0] - p[0]) * d[0] + (x[1] - p[1]) * d[1] + (x[2] - p[2]) * d[2]) / len2)
-            .clamp(0.0, 1.0);
         if mix > 0.5 + (t - 0.5) * strength.min(1.0) {
             j
         } else {
@@ -346,6 +415,21 @@ fn parse_hex6(s: &str) -> Option<Rgb> {
 
 /// Load a palette from .gpl, .pal (JASC or RIFF), .act, .hex, paint.net .txt, or a swatch image.
 pub fn load_palette(path: &Path) -> Result<Vec<Rgb>> {
+    // Built-in Lospec palettes: "builtin:pico-8".
+    if let Some(name) = path
+        .to_str()
+        .and_then(|s| s.strip_prefix(crate::lospec::BUILTIN_PREFIX))
+    {
+        return crate::lospec::builtin(name)
+            .map(|p| p.colors)
+            .with_context(|| {
+                let names: Vec<&str> = crate::lospec::BUILTINS.iter().map(|b| b.slug).collect();
+                format!(
+                    "no built-in palette '{name}' (available: {})",
+                    names.join(", ")
+                )
+            });
+    }
     let ext = path
         .extension()
         .and_then(|e| e.to_str())

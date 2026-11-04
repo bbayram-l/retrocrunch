@@ -4,6 +4,7 @@ mod blocks_tab;
 mod detail_panel;
 mod gpu;
 mod model_tab;
+mod palette_library;
 mod rig_panel;
 mod scale_tab;
 mod sprite_tab;
@@ -101,6 +102,7 @@ pub struct PsxForgeApp {
     applied_theme: Option<(bool, f32)>,
     /// Detected Blender executable (path lookup only; no process is started).
     blender: Option<String>,
+    palette_lib: palette_library::PaletteLibrary,
 }
 
 const STORAGE_KEY: &str = "psx-forge-state";
@@ -127,6 +129,7 @@ impl PsxForgeApp {
             show_about: false,
             applied_theme: None,
             blender: psx_forge::blender::find_blender().map(|p| p.display().to_string()),
+            palette_lib: Default::default(),
         };
         if let Some(pp) = app.prefs.palette_path.clone() {
             app.load_palette(&pp);
@@ -140,11 +143,18 @@ impl PsxForgeApp {
     fn load_palette(&mut self, p: &Path) {
         match palette::load_palette(p) {
             Ok(colors) => {
-                let name = p
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("palette")
-                    .to_string();
+                let builtin = p
+                    .to_str()
+                    .and_then(|s| s.strip_prefix(psx_forge::lospec::BUILTIN_PREFIX))
+                    .and_then(psx_forge::lospec::builtin);
+                let name = match builtin {
+                    Some(b) => b.name,
+                    None => p
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("palette")
+                        .to_string(),
+                };
                 self.shared.status = format!("Palette {name}: {} colours", colors.len());
                 self.shared.palette = Some(NamedPalette {
                     name,
@@ -175,7 +185,10 @@ impl PsxForgeApp {
                 self.tab = Tab::Model;
                 self.model.load(p, sh);
             }
-            "gpl" | "pal" | "act" | "hex" | "txt" => self.load_palette(&p),
+            "gpl" | "pal" | "act" | "hex" | "txt" => {
+                self.load_palette(&p);
+                self.use_loaded_palette();
+            }
             "png" | "jpg" | "jpeg" | "bmp" | "tga" | "gif" => match self.tab {
                 Tab::Sprite => self.sprite.load(p, sh),
                 Tab::Scale => self.scale.load(p, sh),
@@ -206,6 +219,10 @@ impl PsxForgeApp {
                             self.texture.open_dialog(&mut self.shared);
                         }
                     }
+                }
+                if ui.button("Palette library...").clicked() {
+                    ui.close_menu();
+                    self.palette_lib.open = true;
                 }
                 if ui.button("Load palette...").clicked() {
                     ui.close_menu();
@@ -302,7 +319,30 @@ impl PsxForgeApp {
             .pick_file()
         {
             self.load_palette(&p);
+            self.use_loaded_palette();
         }
+    }
+
+    /// A palette the user just chose should change the colours: switch Model and Texture
+    /// to "imported: all colours" (the auto modes build their own palette).
+    fn use_loaded_palette(&mut self) {
+        use psx_forge::texture::PaletteMode;
+        let Some(p) = &self.shared.palette else {
+            return;
+        };
+        for mode in [
+            &mut self.model.settings.texture.palette_mode,
+            &mut self.texture.settings.palette_mode,
+        ] {
+            if !matches!(*mode, PaletteMode::ImportedAll | PaletteMode::ImportedBestN) {
+                *mode = PaletteMode::ImportedAll;
+            }
+        }
+        self.shared.status = format!(
+            "Palette {} ({} colours) now drives Model and Texture.",
+            p.name,
+            p.colors.len()
+        );
     }
 
     fn palette_panel(&mut self, ui: &mut egui::Ui) {
@@ -315,6 +355,15 @@ impl PsxForgeApp {
                 None => {
                     ui.label(RichText::new("none (auto k-means)").color(DIM));
                 }
+            }
+            if ui
+                .button("Library...")
+                .on_hover_text(
+                    "10 built-in palettes, the Lospec palette list and your imported palettes",
+                )
+                .clicked()
+            {
+                self.palette_lib.open = true;
             }
             if ui
                 .button("Load...")
@@ -339,6 +388,19 @@ impl PsxForgeApp {
                 if ui.button("Clear").clicked() {
                     self.shared.palette = None;
                     self.prefs.palette_path = None;
+                }
+                let unused = !matches!(
+                    self.model.settings.texture.palette_mode,
+                    psx_forge::texture::PaletteMode::ImportedAll
+                        | psx_forge::texture::PaletteMode::ImportedBestN
+                );
+                if unused
+                    && ui
+                        .button("Use in Model + Texture")
+                        .on_hover_text("The current palette mode ignores this palette: switch both tabs to 'imported: all colours'")
+                        .clicked()
+                {
+                    self.use_loaded_palette();
                 }
             }
             widgets::hint(ui, "Used by 'Imported' palette modes in Model and Texture.");
@@ -486,6 +548,22 @@ impl PsxForgeApp {
         }
         self.model.quick_export_window(ctx, &mut self.shared);
         self.model.preset_window(ctx, &mut self.shared);
+        if let Some(palette_library::Action::Use {
+            name,
+            colors,
+            persist,
+        }) = self.palette_lib.window(ctx)
+        {
+            self.shared.status = format!("Palette {name}: {} colours", colors.len());
+            let is_file = persist.is_file();
+            self.shared.palette = Some(NamedPalette {
+                name,
+                path: is_file.then(|| persist.clone()),
+                colors,
+            });
+            self.prefs.palette_path = Some(persist);
+            self.use_loaded_palette();
+        }
     }
 }
 

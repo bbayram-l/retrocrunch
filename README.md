@@ -25,7 +25,15 @@ Requires the Rust MSVC toolchain plus the Visual Studio C++ build tools (meshopt
 
 - Drag and drop files onto the window: models go to **Model**, palettes (`.gpl .pal .act .hex .txt`) go to the palette library, and images go to the current image tab.
 - **Model viewport**: LMB orbit, RMB/MMB or Shift+LMB pan, wheel zoom. Header toggles cover jitter, affine UVs, dither, 15-bit colour, Z-buffer (off = PS1 ordering-table sorting), textures, fog, turntable and resolution (224p / 240p / 480i / native).
+- **Dithering** with a fixed palette: ordered modes (Bayer 4x4, Bayer 8x8, PS1 table) pick each colour's mixing partner from the whole palette, like Aseprite does. Floyd-Steinberg error diffusion runs in linear light and is the most faithful mode for photo-like textures, but doesn't tile seamlessly; use an ordered mode for tiling floors and walls.
 - **Palettes** are built and matched in Oklab, so colours go where the eye sees differences. With a palette, dithering mixes each texel's two nearest palette colours with the ordered matrix (Bayer or the PS1 table), positioned in linear light; `dither amount` 16 is full mixing. Without a palette (RGB555 only) dithering is the PS1 GPU's offset before truncation.
+- **Palette library** (palette panel > Library..., or Edit menu):
+  - **Built-in:** 10 ready-to-use palettes from lospec.com, credited to their authors: PICO-8, Sweetie 16, DawnBringer 16 and 32, Endesga 32, AAP-64, Resurrect 64, Apollo, Steam Lords and Darkseed 16.
+  - **Lospec:** browse the lospec.com palette list by tag (horror, gameboy, nes...), colour count (at most/at least/exactly) and sort order, page by page; or import any palette by name or URL.
+  - **My palettes:** palettes you've used are saved as .gpl in `%APPDATA%\psx-forge\palettes` (override with `PSXFORGE_PALETTES`), together with any palette files you drop in there.
+  - **Use in Model + Texture** switches both tabs to the loaded palette.
+  - **CLI:** `psx-forge palettes` lists the built-ins. `psx-forge palettes nyx8 --save nyx8.gpl` imports one. `psx-forge palettes --tag horror --colors 16 --count max` browses.
+  - **Built-ins work anywhere a palette file does:** `--palette builtin:pico-8`.
 - **Detail focus** (Detail focus section, on by default; `--no-face-focus` and `--focus-strength` on the CLI, `focus_face` and `focus_strength` over MCP). The converter finds the head and protects it, so big armour, spikes or capes can't flatten the face.
   - **Finding the head:** vertices skinned mostly to head, face, jaw or skull bones on rigs. On static models, the head is found from the shape of an upright character: the highest point near the centre line, sized to about 1/7.5 of the height. Shoulder spikes and horns off to the side don't count, and shapes that aren't character-like are left alone.
   - **Triangles:** the focus area gets its own share of the budget, with its surface counting `strength` times (default 4). Two locked passes keep the border crack-free. Shape error alone can't protect a face, because its features are tiny next to big geometry.
@@ -197,3 +205,17 @@ A preset stores the full conversion settings, plus export settings if you choose
 ## Not supported yet
 
 - OBJ has no skeleton or animation in the format, so rigged models export to OBJ in their bind pose. Use GLB or FBX for animation.
+
+## Versioning
+
+psx-forge follows [Semantic Versioning](https://semver.org/). Before 1.0, a minor bump
+(0.x.0) adds features and may change defaults or output; a patch bump (0.x.y) only fixes
+bugs and security issues. Changes are listed in [CHANGELOG.md](CHANGELOG.md), and each
+release is a git tag `v<version>`.
+
+The version is shown under Help > About, by `psx-forge --version`, in the MCP server's
+`serverInfo`, and on the first line of every export's `IMPORT_NOTES.txt`.
+
+To release: move the `[Unreleased]` notes in CHANGELOG.md under a new version heading,
+set the same version in `Cargo.toml`, run `cargo test` (a test checks that the two
+agree), then commit and tag `v<version>`.

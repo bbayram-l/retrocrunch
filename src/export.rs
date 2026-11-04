@@ -273,7 +273,11 @@ pub fn export_model(model: &Model, dir: &Path, s: &ExportSettings) -> Result<Vec
         written.push(p);
     }
     let notes = dir.join("IMPORT_NOTES.txt");
-    let mut text = format!("{}\n", s.preset.import_notes());
+    let mut text = format!(
+        "Made with psx-forge {}.\n\n{}\n",
+        env!("CARGO_PKG_VERSION"),
+        s.preset.import_notes()
+    );
     if let Some(r) = model.rig.as_ref().filter(|_| model.is_rigged()) {
         let clips: Vec<&str> = r.clips.iter().map(|c| c.name.as_str()).collect();
         text.push_str(&format!(

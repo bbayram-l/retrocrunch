@@ -68,6 +68,8 @@ impl TextureOptions {
             dither: match self.dither.to_ascii_lowercase().as_str() {
                 "off" | "none" => DitherMode::None,
                 "bayer" | "bayer4" => DitherMode::Bayer4,
+                "bayer8" => DitherMode::Bayer8,
+                "floyd" | "floyd-steinberg" | "fs" | "diffusion" => DitherMode::FloydSteinberg,
                 "ps1" | "psx" => DitherMode::Ps1Table,
                 other => bail!("unknown dither '{other}' (bayer, ps1, off)"),
             },
@@ -831,6 +833,59 @@ pub fn extract_palette(path: &Path, colors: usize, save: Option<&Path>) -> Resul
     Ok(
         json!({"colors": pal.iter().map(|c| format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])).collect::<Vec<_>>(), "saved": save.map(|s| s.display().to_string())}),
     )
+}
+
+fn palette_json(p: &crate::lospec::LospecPalette) -> Value {
+    json!({
+        "slug": p.slug,
+        "name": p.name,
+        "author": p.author,
+        "colors": p.colors.iter().map(|c| format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])).collect::<Vec<_>>(),
+        "use_as": format!("{}{}", crate::lospec::BUILTIN_PREFIX, p.slug),
+    })
+}
+
+/// The 10 built-in palettes (use as `palette: "builtin:<slug>"`).
+pub fn builtin_palettes() -> Value {
+    json!({"palettes": crate::lospec::BUILTINS.iter().map(|b| {
+        let mut v = palette_json(&b.palette());
+        v["note"] = json!(b.note);
+        v
+    }).collect::<Vec<_>>()})
+}
+
+/// Import a Lospec palette by slug or URL. `save`: also write it there (.gpl/.hex/.pal);
+/// `library`: add it to the user palette folder (shown in the app's palette library).
+pub fn lospec_import(slug_or_url: &str, save: Option<&Path>, library: bool) -> Result<Value> {
+    let p = crate::lospec::fetch(slug_or_url)?;
+    if let Some(s) = save {
+        palette::save_palette(s, &p.colors)?;
+    }
+    let lib = if library {
+        Some(crate::lospec::save_user(&p)?.display().to_string())
+    } else {
+        None
+    };
+    let mut v = palette_json(&p);
+    // Imported palettes are files, not built-ins.
+    v["use_as"] = json!(save.map(|s| s.display().to_string()).or(lib.clone()));
+    v["saved"] = json!(save.map(|s| s.display().to_string()));
+    v["library"] = json!(lib);
+    Ok(v)
+}
+
+/// One page of the Lospec palette list.
+pub fn lospec_list(q: &crate::lospec::ListQuery) -> Result<Value> {
+    let (items, total) = crate::lospec::fetch_list(q)?;
+    Ok(json!({
+        "total": total,
+        "page": q.page,
+        "palettes": items.iter().map(|p| {
+            let mut v = palette_json(p);
+            v["use_as"] = json!(null);
+            v
+        }).collect::<Vec<_>>(),
+    }))
 }
 
 pub fn blender_info() -> Value {

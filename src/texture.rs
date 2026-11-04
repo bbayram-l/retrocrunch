@@ -21,6 +21,26 @@ pub fn bayer4(x: u32, y: u32) -> f32 {
     M[(y % 4) as usize][(x % 4) as usize] as f32 / 16.0 - 0.5
 }
 
+/// Normalised 8x8 Bayer matrix in [-0.5, 0.5): 64 levels, finer gradients than 4x4.
+pub fn bayer8(x: u32, y: u32) -> f32 {
+    // Bayer(2n) = [[4M, 4M+2], [4M+3, 4M+1]], unrolled over the three bit levels.
+    let (mut v, mut x, mut y) = (0u32, x % 8, y % 8);
+    for _ in 0..3 {
+        let q = match (x & 1, y & 1) {
+            (0, 0) => 0,
+            (1, 0) => 2,
+            (0, 1) => 3,
+            _ => 1,
+        };
+        v = v * 4 + q;
+        x >>= 1;
+        y >>= 1;
+    }
+    // The lowest coordinate bit picks the coarsest level (most significant digit), so
+    // neighbouring texels are as far apart as possible.
+    v as f32 / 64.0 - 0.5
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ResizeFilter {
     Nearest,
@@ -74,16 +94,29 @@ impl PaletteMode {
 pub enum DitherMode {
     None,
     Bayer4,
+    /// 8x8 ordered matrix: smoother gradients, finer pattern.
+    Bayer8,
     Ps1Table,
+    /// Error diffusion (serpentine Floyd-Steinberg): the most faithful colours with a
+    /// fixed palette, but a noisier pattern that doesn't tile seamlessly.
+    FloydSteinberg,
 }
 
 impl DitherMode {
-    pub const ALL: [DitherMode; 3] = [Self::None, Self::Bayer4, Self::Ps1Table];
+    pub const ALL: [DitherMode; 5] = [
+        Self::None,
+        Self::Bayer4,
+        Self::Bayer8,
+        Self::Ps1Table,
+        Self::FloydSteinberg,
+    ];
     pub fn label(self) -> &'static str {
         match self {
             Self::None => "Off",
             Self::Bayer4 => "Bayer 4x4",
+            Self::Bayer8 => "Bayer 8x8",
             Self::Ps1Table => "PS1 GPU table",
+            Self::FloydSteinberg => "Floyd-Steinberg (error diffusion)",
         }
     }
 }
@@ -303,6 +336,8 @@ fn dither_threshold(mode: DitherMode, x: u32, y: u32) -> Option<f32> {
     match mode {
         DitherMode::None => None,
         DitherMode::Bayer4 => Some(bayer4(x, y) + 0.5 + 1.0 / 32.0),
+        DitherMode::Bayer8 => Some(bayer8(x, y) + 0.5 + 1.0 / 128.0),
+        DitherMode::FloydSteinberg => None,
         DitherMode::Ps1Table => {
             Some((PS1_DITHER[(y % 4) as usize][(x % 4) as usize] as f32 + 4.5) / 8.0)
         }
@@ -316,6 +351,8 @@ fn dither_offset(mode: DitherMode, amount: f32, x: u32, y: u32) -> f32 {
     match mode {
         DitherMode::None => 0.0,
         DitherMode::Bayer4 => bayer4(x, y) * amount,
+        DitherMode::Bayer8 => bayer8(x, y) * amount,
+        DitherMode::FloydSteinberg => 0.0,
         DitherMode::Ps1Table => {
             PS1_DITHER[(y % 4) as usize][(x % 4) as usize] as f32 * amount / 8.0
         }
@@ -368,6 +405,9 @@ pub fn quantize(img: &RgbaImage, s: &CrunchSettings, pal: &[Rgb]) -> RgbaImage {
     } else {
         Some(PaletteLut::new(pal))
     };
+    if s.dither == DitherMode::FloydSteinberg {
+        return error_diffusion(img, s, pal, lut.as_ref());
+    }
     let mut out = img.clone();
     for (x, y, p) in out.enumerate_pixels_mut() {
         let a = p.0[3];
@@ -436,6 +476,71 @@ pub fn crunch(
         palette: pal,
         has_transparency,
     }
+}
+
+/// Serpentine Floyd-Steinberg: each texel's quantisation error is spread to its
+/// unvisited neighbours (7/16 ahead, 3/16 behind below, 5/16 below, 1/16 ahead below),
+/// rows alternating direction so the error doesn't drift sideways. The error is kept in
+/// linear light, where neighbouring texels actually blend on screen, so areas average
+/// out to the right colour (sRGB-space diffusion comes out too dark or too bright).
+/// `dither_amount` / `PALETTE_DITHER_FULL` scales the error (1 = full). Without a
+/// palette, the target is RGB555 (or 8-bit) like the other modes.
+fn error_diffusion(
+    img: &RgbaImage,
+    s: &CrunchSettings,
+    pal: &[Rgb],
+    lut: Option<&PaletteLut>,
+) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let factor = (s.dither_amount / PALETTE_DITHER_FULL).clamp(0.0, 1.0);
+    let mut out = img.clone();
+    // Error buffers for this row and the next, with a 1-texel margin on each side.
+    let mut cur = vec![[0f32; 3]; w as usize + 2];
+    let mut next = vec![[0f32; 3]; w as usize + 2];
+    for y in 0..h {
+        let ltr = y % 2 == 0;
+        for i in 0..w {
+            let x = if ltr { i } else { w - 1 - i };
+            let p = out.get_pixel_mut(x, y);
+            match s.alpha {
+                AlphaMode::Opaque => p.0[3] = 255,
+                AlphaMode::Cutout => {
+                    if p.0[3] < s.alpha_threshold {
+                        p.0 = [0, 0, 0, 0];
+                        continue;
+                    }
+                    p.0[3] = 255;
+                }
+                AlphaMode::Keep => {}
+            }
+            let e = cur[x as usize + 1];
+            let src = palette::to_linear([p.0[0], p.0[1], p.0[2]]);
+            let want = [0, 1, 2].map(|k| (src[k] + e[k]).clamp(0.0, 1.0));
+            let c = palette::linear_to_srgb8(want);
+            let q = match lut {
+                Some(l) => pal[l.lookup(c) as usize],
+                None if s.rgb555 => palette::snap_rgb555(c),
+                None => c,
+            };
+            p.0[0] = q[0];
+            p.0[1] = q[1];
+            p.0[2] = q[2];
+            let got = palette::to_linear(q);
+            let err = [0, 1, 2].map(|k| (want[k] - got[k]) * factor);
+            // Neighbour offsets in the scan direction.
+            let (ahead, behind) = if ltr { (2usize, 0usize) } else { (0, 2) };
+            let xi = x as usize;
+            for k in 0..3 {
+                cur[xi + ahead][k] += err[k] * 7.0 / 16.0;
+                next[xi + behind][k] += err[k] * 3.0 / 16.0;
+                next[xi + 1][k] += err[k] * 5.0 / 16.0;
+                next[xi + ahead][k] += err[k] * 1.0 / 16.0;
+            }
+        }
+        std::mem::swap(&mut cur, &mut next);
+        next.iter_mut().for_each(|e| *e = [0.0; 3]);
+    }
+    out
 }
 
 /// Number of distinct RGBA colours in an image (for stats).
@@ -606,6 +711,71 @@ mod tests {
         s.dither = DitherMode::Ps1Table;
         let ps1 = count_white(&s);
         assert!((32..=96).contains(&ps1), "PS1 table mixes too, got {ps1}");
+    }
+
+    #[test]
+    fn bayer8_has_every_level_once() {
+        let mut seen = [false; 64];
+        for y in 0..8 {
+            for x in 0..8 {
+                let v = ((bayer8(x, y) + 0.5) * 64.0).round() as usize;
+                assert!(!seen[v], "duplicate level {v}");
+                seen[v] = true;
+            }
+        }
+        // Neighbours differ a lot (dispersed pattern): 0 and 32 sit diagonally.
+        assert_eq!(((bayer8(0, 0) + 0.5) * 64.0).round() as i32, 0);
+        assert_eq!(((bayer8(1, 1) + 0.5) * 64.0).round() as i32, 16);
+    }
+
+    #[test]
+    fn dithering_reproduces_colours_between_palette_entries() {
+        // Purple between red and blue, with a misleading dark red and a green in the
+        // palette. A flat area must average out near the target.
+        let target = [128u8, 0, 128];
+        let img =
+            RgbaImage::from_pixel(32, 32, image::Rgba([target[0], target[1], target[2], 255]));
+        let pal = vec![[255, 0, 0], [0, 0, 255], [120, 0, 0], [0, 255, 0]];
+        let lin = |c: [u8; 3]| palette::to_linear(c);
+        let t = lin(target);
+        let err = |img: &RgbaImage| {
+            let mut m = [0f32; 3];
+            for p in img.pixels() {
+                let l = lin([p.0[0], p.0[1], p.0[2]]);
+                for k in 0..3 {
+                    m[k] += l[k] / (32.0 * 32.0);
+                }
+            }
+            (0..3).map(|k| (m[k] - t[k]).abs()).fold(0.0f32, f32::max)
+        };
+        let nearest_only = pal
+            .iter()
+            .map(|&c| {
+                (0..3)
+                    .map(|k| (lin(c)[k] - t[k]).abs())
+                    .fold(0.0f32, f32::max)
+            })
+            .fold(f32::MAX, f32::min);
+        for dither in [DitherMode::Bayer8, DitherMode::FloydSteinberg] {
+            let s = CrunchSettings {
+                dither,
+                dither_amount: PALETTE_DITHER_FULL,
+                alpha: AlphaMode::Opaque,
+                ..Default::default()
+            };
+            let out = quantize(&img, &s, &pal);
+            assert!(count_colors(&out) >= 2, "{dither:?} mixes colours");
+            assert!(
+                err(&out) < nearest_only * 0.6,
+                "{dither:?}: mean error {} vs best single colour {}",
+                err(&out),
+                nearest_only
+            );
+            assert!(
+                out.pixels()
+                    .all(|p| pal.contains(&[p.0[0], p.0[1], p.0[2]]))
+            );
+        }
     }
 
     #[test]

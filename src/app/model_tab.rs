@@ -515,16 +515,7 @@ impl ModelTab {
                 }
                 if ui.button("Open presets folder").clicked() {
                     ui.close_menu();
-                    let dir = psx_forge::presets::user_dir();
-                    let _ = std::fs::create_dir_all(&dir);
-                    let opener = if cfg!(windows) {
-                        "explorer"
-                    } else if cfg!(target_os = "macos") {
-                        "open"
-                    } else {
-                        "xdg-open"
-                    };
-                    let _ = std::process::Command::new(opener).arg(&dir).spawn();
+                    widgets::open_folder(&psx_forge::presets::user_dir());
                 }
                 if ui.button("Reload presets").clicked() {
                     ui.close_menu();

@@ -225,6 +225,19 @@ impl ImageView {
     }
 }
 
+/// Open a folder in the system file manager.
+pub fn open_folder(dir: &std::path::Path) {
+    let _ = std::fs::create_dir_all(dir);
+    let opener = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let _ = std::process::Command::new(opener).arg(dir).spawn();
+}
+
 pub fn swatches(ui: &mut Ui, palette: &[Rgb], size: f32) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = Vec2::splat(2.0);

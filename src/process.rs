@@ -450,8 +450,8 @@ fn remesh_pieces(
     }
     progress("Remeshing (Blender)", 0.03);
     let tris = (budget.max(1) as f32 * s.remesh_density.max(1.0)) as usize;
-    match crate::blender::remesh(src, tris.div_ceil(2)) {
-        Ok(p) if !p.is_empty() => {
+    match crate::blender::remesh_cached(src, tris.div_ceil(2)) {
+        Ok((p, _cached)) if !p.is_empty() => {
             *src = p;
             true
         }

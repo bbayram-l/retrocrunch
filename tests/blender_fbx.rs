@@ -203,4 +203,32 @@ fn remesh_first_evens_out_triangles_on_static_models() {
     );
     let tris = remeshed.model.tri_count();
     assert!((30..=90).contains(&tris), "budget respected: {tris}");
+
+    // Texture-only changes reuse the remesh; a new budget runs Blender again.
+    use std::sync::atomic::Ordering;
+    let runs = psx_forge::blender::REMESH_RUNS.load(Ordering::Relaxed);
+    let mut texture_change = psx_forge::process::ConvertSettings {
+        remesh: true,
+        ..base.clone()
+    };
+    texture_change.texture.colors = 4;
+    texture_change.texture.max_size = 64;
+    let again = psx_forge::process::convert(&m, &ps, &texture_change, None, &|_, _| {});
+    assert_eq!(
+        psx_forge::blender::REMESH_RUNS.load(Ordering::Relaxed),
+        runs,
+        "cached"
+    );
+    assert_eq!(again.model.tri_count(), remeshed.model.tri_count());
+    let budget_change = psx_forge::process::ConvertSettings {
+        remesh: true,
+        target_tris: 40,
+        ..base.clone()
+    };
+    psx_forge::process::convert(&m, &ps, &budget_change, None, &|_, _| {});
+    assert_eq!(
+        psx_forge::blender::REMESH_RUNS.load(Ordering::Relaxed),
+        runs + 1,
+        "new budget remeshes"
+    );
 }

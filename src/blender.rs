@@ -245,6 +245,49 @@ fn output_with_timeout(
     }
 }
 
+/// Remesh results of recent inputs, so conversions that only change textures, colours
+/// or lighting don't run Blender again. Keyed by the input geometry and the target size.
+static REMESH_CACHE: std::sync::Mutex<Vec<(u64, Vec<crate::mesh::Piece>)>> =
+    std::sync::Mutex::new(Vec::new());
+/// How many remesh results to keep (a few budgets/models to switch between).
+const REMESH_CACHE_SIZE: usize = 4;
+/// Number of times Blender actually ran a remesh (for tests and diagnostics).
+pub static REMESH_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn remesh_key(pieces: &[crate::mesh::Piece], target_quads: usize) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    target_quads.hash(&mut h);
+    for p in pieces {
+        p.indices.hash(&mut h);
+        for v in &p.vertices {
+            v.pos.to_array().map(f32::to_bits).hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
+/// `remesh`, reusing the result when the geometry and target haven't changed.
+/// Returns the pieces and whether they came from the cache.
+pub fn remesh_cached(
+    pieces: &[crate::mesh::Piece],
+    target_quads: usize,
+) -> Result<(Vec<crate::mesh::Piece>, bool)> {
+    let key = remesh_key(pieces, target_quads);
+    if let Ok(cache) = REMESH_CACHE.lock()
+        && let Some((_, hit)) = cache.iter().find(|(k, _)| *k == key)
+    {
+        return Ok((hit.clone(), true));
+    }
+    let out = remesh(pieces, target_quads)?;
+    if let Ok(mut cache) = REMESH_CACHE.lock() {
+        cache.retain(|(k, _)| *k != key);
+        cache.insert(0, (key, out.clone()));
+        cache.truncate(REMESH_CACHE_SIZE);
+    }
+    Ok((out, false))
+}
+
 /// Rebuild `pieces` as one even, closed surface: voxel remesh, then QuadriFlow to about
 /// `target_quads` quads, triangulated. Positions only: UVs, colours, materials, skins and
 /// morphs are gone, so callers rebake textures from the original pieces.
@@ -254,6 +297,7 @@ pub fn remesh(
 ) -> Result<Vec<crate::mesh::Piece>> {
     use std::fmt::Write as _;
     let exe = require()?;
+    REMESH_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join("psx-forge-blender");
     std::fs::create_dir_all(&dir)?;
     let tag = format!("{}_{}", std::process::id(), target_quads);

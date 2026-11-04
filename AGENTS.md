@@ -28,6 +28,8 @@ Check it with the `blender_info` tool or `psx-forge blender status`.
 4. Adjust and repeat. Typical knobs:
    - Silhouette too blocky: raise `tris`.
    - Texture muddy: raise `colors` or `tex_size`, or lower `dither_amount`.
+   - Fixed palette (`palette` + `palette_mode: "all"`) looks blotchy: `dither: "floyd"`
+     (error diffusion, most faithful; not for tiling textures) or `"bayer8"`.
    - Want PS1 geometry but the source's full texture detail ("pixelated but HD"): pass
      `hd_texture: true`. The texture keeps the source's texel density and full colour
      (no palette, dither or 15-bit); `tex_size` and `colors` are ignored.
@@ -64,6 +66,12 @@ original file (modern reference shading), then with the default PS1 shading on t
 Use `extract_palette {path: <concept art or key asset>, colors: 16, save: shared.gpl}`.
 Then pass `palette: "shared.gpl", palette_mode: "all"` to every `convert_model` /
 `crunch_texture` call, so all assets share one CLUT.
+
+Ready-made palettes: `palettes {}` lists 10 built-ins (PICO-8, Sweetie 16, DawnBringer
+16/32, Endesga 32, AAP-64, Resurrect 64, Apollo, Steam Lords, Darkseed 16); pass e.g.
+`palette: "builtin:darkseed-16", palette_mode: "all"`. From lospec.com:
+`palettes {lospec: "nyx8", save: "nyx8.gpl"}` imports one, and
+`palettes {tag: "horror", colors: 16, count: "max", sort: "downloads"}` browses the list.
 
 ## Engines
 

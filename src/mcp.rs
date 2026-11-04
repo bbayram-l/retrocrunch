@@ -20,7 +20,7 @@ fn texture_props() -> Value {
         "colors": {"type": "integer", "description": "Palette size 2-256 (16 = 4-bit CLUT). Default 16."},
         "palette": {"type": "string", "description": "Palette file (.gpl .pal .act .hex .txt or swatch image) shared across assets."},
         "palette_mode": {"type": "string", "enum": ["best", "all"], "description": "best: pick the N best palette entries; all: use every entry."},
-        "dither": {"type": "string", "enum": ["bayer", "ps1", "off"]},
+        "dither": {"type": "string", "enum": ["bayer", "bayer8", "ps1", "floyd", "off"], "description": "Ordered: bayer (4x4), bayer8 (finer), ps1 (GPU table). floyd = Floyd-Steinberg error diffusion: most faithful with a fixed palette, but doesn't tile seamlessly"},
         "dither_amount": {"type": "number", "description": "Dither amplitude in 8-bit units. Default 12."},
         "brightness": {"type": "number", "description": "-0.5..0.5, applied before the palette."},
         "rgb555": {"type": "boolean", "description": "Snap colours to 15-bit like the PS1. Default true."}
@@ -156,6 +156,20 @@ pub fn tools() -> Vec<Value> {
             &["path"],
         ),
         tool(
+            "palettes",
+            "Palettes for a project's shared CLUT. With no arguments: the 10 built-in palettes (PICO-8, Sweetie 16, DawnBringer 16/32, Endesga 32, AAP-64, Resurrect 64, Apollo, Steam Lords, Darkseed 16); pass `palette: \"builtin:<slug>\"` to convert_model / crunch_texture to use one. `lospec`: import a palette from lospec.com by slug or URL (e.g. 'pico-8'), optionally writing it to `save` (.gpl/.hex/.pal) for use as `palette`. `tag` (e.g. horror, gameboy, nes), `colors` + `count` (any|max|min|exact), `sort` (default|downloads|newest|alphabetical) and `page` browse the Lospec list instead.",
+            json!({
+                "lospec": {"type": "string", "description": "Slug or lospec.com URL to import"},
+                "save": {"type": "string", "description": "Write the imported palette here (.gpl/.hex/.pal)"},
+                "tag": {"type": "string"},
+                "colors": {"type": "integer"},
+                "count": {"type": "string", "enum": ["any", "max", "min", "exact"]},
+                "sort": {"type": "string", "enum": ["default", "downloads", "newest", "alphabetical"]},
+                "page": {"type": "integer"}
+            }),
+            &[],
+        ),
+        tool(
             "list_presets",
             "List conversion presets: built-in templates for asset types and art styles (characters, environment, props, vehicles, strict PS1, concept-art match, ...) and the user's saved presets. Pass a name as convert_model's `preset`.",
             json!({}),
@@ -192,6 +206,59 @@ fn text(v: &Value) -> Value {
 }
 
 /// Run one tool; returns MCP content blocks.
+/// The `palettes` tool's browsing/listing logic, shared with the CLI.
+pub fn call_palettes(args: &Value) -> Result<Value> {
+    palettes_tool(args)
+}
+
+fn palettes_tool(args: &Value) -> Result<Value> {
+    use crate::lospec::{CountFilter, ListQuery, Sorting};
+    if let Some(slug) = args.get("lospec").and_then(Value::as_str) {
+        let save = args
+            .get("save")
+            .and_then(Value::as_str)
+            .map(std::path::PathBuf::from);
+        // Agents stay inside the workspace: no writes to the user's palette library.
+        return ops::lospec_import(slug, save.as_deref(), false);
+    }
+    let browsing = ["tag", "colors", "count", "sort", "page"]
+        .iter()
+        .any(|k| args.get(*k).is_some());
+    if !browsing {
+        return Ok(ops::builtin_palettes());
+    }
+    let q = ListQuery {
+        tag: args
+            .get("tag")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        count: match args.get("count").and_then(Value::as_str).unwrap_or("any") {
+            "max" => CountFilter::Max,
+            "min" => CountFilter::Min,
+            "exact" => CountFilter::Exact,
+            "any" => CountFilter::Any,
+            other => anyhow::bail!("unknown count filter '{other}' (any, max, min, exact)"),
+        },
+        colors: args.get("colors").and_then(Value::as_u64).unwrap_or(16) as usize,
+        sorting: match args
+            .get("sort")
+            .and_then(Value::as_str)
+            .unwrap_or("default")
+        {
+            "downloads" => Sorting::Downloads,
+            "newest" => Sorting::Newest,
+            "alphabetical" => Sorting::Alphabetical,
+            "default" => Sorting::Default,
+            other => {
+                anyhow::bail!("unknown sort '{other}' (default, downloads, newest, alphabetical)")
+            }
+        },
+        page: args.get("page").and_then(Value::as_u64).unwrap_or(0) as usize,
+    };
+    ops::lospec_list(&q)
+}
+
 pub fn call_tool(name: &str, args: &Value) -> Result<Vec<Value>> {
     let quiet = |_: &str, _: f32| {};
     let report = match name {
@@ -216,6 +283,7 @@ pub fn call_tool(name: &str, args: &Value) -> Result<Vec<Value>> {
                 .map(std::path::PathBuf::from);
             ops::extract_palette(&str_arg(args, "path")?, colors, save.as_deref())?
         }
+        "palettes" => palettes_tool(args)?,
         "blender_info" => ops::blender_info(),
         "list_presets" => ops::list_presets(),
         "blender_convert" => {
@@ -424,6 +492,16 @@ mod tests {
 
     fn handle_any(msg: &Value) -> Option<Value> {
         handle(msg, None)
+    }
+
+    #[test]
+    fn palettes_tool_lists_builtins_offline() {
+        let r = call_palettes(&json!({})).unwrap();
+        let list = r["palettes"].as_array().unwrap();
+        assert_eq!(list.len(), 10);
+        assert!(list.iter().any(|p| p["use_as"] == "builtin:pico-8"));
+        assert!(call_palettes(&json!({"lospec": "../x"})).is_err());
+        assert!(call_palettes(&json!({"tag": "a&b"})).is_err());
     }
 
     #[test]
