@@ -99,7 +99,8 @@ reproduce what the hardware did:
 
 ## Quick start
 
-Ready-built releases are coming to itch.io. Until then, build from source with the Rust
+**Download a ready-built Windows release from [itch.io](https://laegh.itch.io/retrocrunch)**:
+free, or pay what you want to support development. Or build from source with the Rust
 MSVC toolchain and the Visual Studio C++ build tools:
 
 ```powershell
