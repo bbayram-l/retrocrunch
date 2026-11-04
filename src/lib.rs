@@ -11,6 +11,7 @@ pub mod bake;
 pub mod blender;
 pub mod blocks;
 pub mod decimate;
+pub mod detail;
 pub mod export;
 pub mod fbx;
 pub mod mcp;

@@ -33,6 +33,10 @@ Check it with the `blender_info` tool or `psx-forge blender status`.
      (no palette, dither or 15-bit); `tex_size` and `colors` are ignored.
    - Floors and walls warp: set `subdivide` to about 1/4 of the model size.
    - Holes in the mesh: set `remove_hidden: false`.
+   - Face flattened or blurry while armour/spikes look fine: detail focus is on by
+     default; raise `focus_strength` (default 4, e.g. 5-6). `focus` in the report says
+     whether a head was found (`"head"`); if not (not an upright character), there's
+     no automatic face focus.
    - Long thin triangles (texture swims, blotchy lighting) or a messy scan on a static
      model: set `remesh: true` (needs Blender; rigged/morphed models are refused).
    - Small separate parts (straps, pockets, decals, badges) waste triangles: pass their

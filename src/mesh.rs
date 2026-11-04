@@ -52,6 +52,8 @@ pub struct Piece {
     pub morph_group: Option<usize>,
     /// Default morph weights (rest expression).
     pub morph_weights: Vec<f32>,
+    /// Hand-painted detail priority per vertex (0..1, empty = none); see `detail.rs`.
+    pub detail: Vec<f32>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -151,10 +153,16 @@ impl Piece {
             }
             *i = *r;
         }
+        let painted = self.detail.len() == self.vertices.len();
         self.vertices = verts;
         for m in &mut self.morphs {
             m.remap(&order);
         }
+        self.detail = if painted {
+            order.iter().map(|&o| self.detail[o]).collect()
+        } else {
+            Vec::new()
+        };
     }
 
     pub fn has_morphs(&self) -> bool {
@@ -864,6 +872,7 @@ fn load_gltf(path: &Path) -> Result<Model> {
                     w
                 },
                 morphs,
+                detail: Vec::new(),
             };
             if nrm.is_none() {
                 p.recompute_normals();

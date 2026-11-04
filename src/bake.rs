@@ -245,9 +245,45 @@ fn shelf_pack(
 /// seams (skin weights, colours and morph deltas are copied with them).
 /// Returns None when the charts can't fit (the caller keeps the original UVs).
 pub fn unwrap_atlas(pieces: &mut [Piece], n: u32, pad: u32, angle_deg: f32) -> Option<Unwrap> {
-    let charts = build_charts(pieces, angle_deg);
+    unwrap_atlas_with_detail(pieces, n, pad, angle_deg, None)
+}
+
+/// `detail`: (field, strength). Charts in high-priority areas (the face) get up to
+/// `strength` times the texel density of the rest.
+pub fn unwrap_atlas_with_detail(
+    pieces: &mut [Piece],
+    n: u32,
+    pad: u32,
+    angle_deg: f32,
+    detail: Option<(&crate::detail::DetailField, f32)>,
+) -> Option<Unwrap> {
+    let mut charts = build_charts(pieces, angle_deg);
     if charts.is_empty() {
         return None;
+    }
+    if let Some((field, strength)) = detail.filter(|(f, s)| !f.is_empty() && *s > 1.0) {
+        for c in &mut charts {
+            let p = &pieces[c.piece];
+            let (mut sum, mut area) = (0.0f32, 0.0f32);
+            for &t in &c.tris {
+                let (_, a) = tri_normal(p, t);
+                let i = &p.indices[t * 3..t * 3 + 3];
+                let centre = (p.vertices[i[0] as usize].pos
+                    + p.vertices[i[1] as usize].pos
+                    + p.vertices[i[2] as usize].pos)
+                    / 3.0;
+                sum += field.at(centre) * a;
+                area += a;
+            }
+            let b = 1.0 + (strength - 1.0) * (sum / area.max(1e-12));
+            for corners in &mut c.corners {
+                for q in corners.iter_mut() {
+                    *q *= b;
+                }
+            }
+            c.lo *= b;
+            c.size *= b;
+        }
     }
     let mut order: Vec<usize> = (0..charts.len()).collect();
     order.sort_by(|&a, &b| charts[b].size.y.total_cmp(&charts[a].size.y));

@@ -1,6 +1,7 @@
 //! Model tab: PS1-style conversion with live PS1 preview.
 
 use super::Shared;
+use super::detail_panel::DetailEditor;
 use super::rig_panel::RigEditor;
 use super::viewport::{Controls, RenderScene, Viewport, axis_gizmo};
 use super::widgets::{
@@ -69,6 +70,9 @@ pub struct ModelTab {
     /// Bone list, test posing and the weight brush.
     #[serde(skip)]
     rig: RigEditor,
+    /// Face focus heat map and the detail brush.
+    #[serde(skip)]
+    detail: DetailEditor,
     #[serde(skip)]
     rig_min_tris: usize,
     #[serde(skip)]
@@ -141,6 +145,7 @@ impl Default for ModelTab {
             posed: None,
             pose_world: Vec::new(),
             rig: RigEditor::default(),
+            detail: DetailEditor::default(),
             rig_min_tris: 0,
         }
     }
@@ -205,13 +210,14 @@ impl ModelTab {
 
     fn settings_key(&self, sh: &Shared) -> String {
         format!(
-            "{}|{}|{}|w{}",
+            "{}|{}|{}|w{}|d{}",
             serde_json::to_string(&self.settings).unwrap_or_default(),
             serde_json::to_string(&self.pieces).unwrap_or_default(),
             sh.palette
                 .as_ref()
                 .map_or(String::new(), |p| p.name.clone()),
-            self.rig.revision
+            self.rig.revision,
+            self.detail.revision
         )
     }
 
@@ -246,6 +252,7 @@ impl ModelTab {
                         self.anim_time = 0.0;
                         self.posed = None;
                         self.rig.reset();
+                        self.detail.reset();
                         self.undo.clear();
                         self.redo.clear();
                         self.selected.clear();
@@ -656,6 +663,8 @@ impl ModelTab {
                     self.rig.section(ui, src);
                 }
                 self.geometry_section(ui);
+                self.detail
+                    .section(ui, &mut self.settings, self.source.as_mut());
                 self.lighting_section(ui);
                 self.texture_section(ui, sh);
                 self.export_section(ui, sh);
@@ -1020,7 +1029,10 @@ impl ModelTab {
 
     /// Skin the displayed scene into the current pose (CPU linear blend skinning).
     fn apply_pose(&mut self) {
-        let original = self.show_original || self.scene_out.is_none() || self.rig.wants_source();
+        let original = self.show_original
+            || self.scene_out.is_none()
+            || self.rig.wants_source()
+            || self.detail.wants_source();
         let key = format!(
             "{original}|{:?}|{}|{}",
             self.anim_clip,
@@ -1423,15 +1435,20 @@ impl ModelTab {
             0.0
         };
         let avail = ui.available_size();
-        let weights_on =
-            self.rig.wants_source() && self.source.as_ref().is_some_and(|m| m.is_rigged());
-        let reference = self.show_original || self.scene_out.is_none() || weights_on;
-        let controls = if weights_on && self.rig.paint {
+        // The detail heat map wins over the weight heat map when both are on.
+        let detail_on = self.detail.wants_source() && self.source.is_some();
+        let weights_on = !detail_on
+            && self.rig.wants_source()
+            && self.source.as_ref().is_some_and(|m| m.is_rigged());
+        let reference = self.show_original || self.scene_out.is_none() || weights_on || detail_on;
+        let controls = if (weights_on && self.rig.paint) || (detail_on && self.detail.paint) {
             Controls::Editor
         } else {
             Controls::Viewer
         };
+        let focus_face = self.settings.focus_face;
         let scene = match (&self.source, &self.scene_src) {
+            (Some(m), Some(s)) if detail_on => Some(self.detail.heat_scene(m, s, focus_face)),
             (Some(m), Some(s)) if weights_on => Some(self.rig.weight_scene(m, s)),
             _ if reference => self.scene_src.as_ref(),
             _ => self.scene_out.as_ref(),
@@ -1455,7 +1472,24 @@ impl ModelTab {
         {
             self.rig.paint_input(ui, &info, scene, src);
         }
-        if weights_on {
+        if detail_on
+            && let (Some(src), Some(scene)) = (self.source.as_mut(), self.scene_src.as_ref())
+        {
+            self.detail.paint_input(ui, &info, scene, src);
+        }
+        if detail_on {
+            ui.painter_at(info.rect).text(
+                info.rect.right_top() + egui::vec2(-8.0, 26.0),
+                egui::Align2::RIGHT_TOP,
+                if self.detail.paint {
+                    "Detail paint: LMB paint · RMB orbit · MMB pan"
+                } else {
+                    "Detail focus: red keeps the most triangles and texels"
+                },
+                egui::FontId::proportional(12.0),
+                ACCENT2,
+            );
+        } else if weights_on {
             ui.painter_at(info.rect).text(
                 info.rect.right_top() + egui::vec2(-8.0, 26.0),
                 egui::Align2::RIGHT_TOP,

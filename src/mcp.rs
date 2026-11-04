@@ -76,6 +76,8 @@ pub fn tools() -> Vec<Value> {
                     "bake_pieces": {"type": "array", "items": {"type": "string"}, "description": "Piece names (see inspect_model) to remove from the geometry and paint into the texture underneath, e.g. pockets, straps, decals"},
                     "bake_distance": {"type": "number", "description": "Rebake search distance, % of model size. Default 3; raise if baked detail is missing"},
                     "chart_angle": {"type": "number", "description": "Atlas chart crease angle in degrees. Default 60"},
+                    "focus_face": {"type": "boolean", "description": "Default true: find the head (head bones, or the shape of an upright character) and keep more triangles and texels on the face"},
+                    "focus_strength": {"type": "number", "description": "Extra detail for the face: collapse cost up to this squared, texel density up to this many times. Default 4, 1 = off"},
                     "remesh": {"type": "boolean", "description": "Static models only, needs Blender: voxel remesh + QuadriFlow before decimation for even triangles (less affine warping) and repaired scans. Textures are rebaked into a fresh atlas"},
                     "hd_texture": {"type": "boolean", "description": "HD texture: keep the source's texel density and full colour (no palette/dither/15-bit) on the low-poly model - pixel-sharp but high resolution. tex_size and colors are ignored"},
                     "preset": {"type": "string", "description": "Start from a preset (see list_presets), e.g. 'Hero character', 'Environment prop', 'Survival horror character'. Other arguments you pass override it"}

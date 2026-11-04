@@ -533,6 +533,7 @@ pub fn load_fbx(path: &Path) -> Result<Model> {
                 morph_group: (!morphs.is_empty()).then_some(n.element.typed_id as usize),
                 morph_weights: shapes.iter().map(|s| s.1).collect(),
                 morphs,
+                detail: Vec::new(),
             };
             if p.vertices.iter().all(|v| v.normal == Vec3::ZERO) {
                 p.recompute_normals();

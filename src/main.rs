@@ -229,6 +229,12 @@ struct ModelArgs {
     /// repaired scans; textures are rebaked into a fresh atlas.
     #[arg(long)]
     remesh: bool,
+    /// Don't look for a head/face to keep extra detail on.
+    #[arg(long)]
+    no_face_focus: bool,
+    /// How much extra detail the face keeps [default: 4; 1 = off].
+    #[arg(long)]
+    focus_strength: Option<f32>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -458,6 +464,8 @@ fn main() -> Result<()> {
                 preset: a.preset,
                 hd_texture: a.hd_texture,
                 remesh: a.remesh,
+                focus_face: !a.no_face_focus,
+                focus_strength: a.focus_strength,
             };
             ops::convert_model(&o, &progress)?
         }

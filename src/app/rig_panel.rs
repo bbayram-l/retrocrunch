@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 /// Visibility of the posed source mesh, rendered when a brush stroke starts so the
 /// brush only reaches surfaces the user can see.
-struct BrushStroke {
+pub(super) struct BrushStroke {
     ids: Vec<u32>,
     w: u32,
     h: u32,
@@ -22,6 +22,21 @@ struct BrushStroke {
     /// First triangle id of every piece.
     tri_base: Vec<u32>,
     neighbours: Vec<Option<Neighbours>>,
+}
+
+impl BrushStroke {
+    /// Visibility of `scene` as shown in `info` (no smoothing neighbourhoods).
+    pub(super) fn new(info: &ViewInfo, scene: &RenderScene) -> Self {
+        let (ids, w, h, tri_base) = render_visibility(info.view, info.proj, info.rect, scene);
+        Self {
+            ids,
+            w,
+            h,
+            rect: info.rect,
+            tri_base,
+            neighbours: Vec::new(),
+        }
+    }
 }
 
 enum Edit {
@@ -595,7 +610,7 @@ impl RigEditor {
 
 /// Triangle-id buffer of `scene` as seen through `view`/`proj` in `rect` (3/4 resolution):
 /// (ids, width, height, first triangle id of every piece).
-fn render_visibility(
+pub(super) fn render_visibility(
     view: Mat4,
     proj: Mat4,
     rect: Rect,
@@ -646,7 +661,7 @@ fn render_visibility(
 
 /// Vertices under the brush at `at` (radius in points) that belong to visible
 /// triangles, with a smooth falloff: per piece, (vertex, 0..1).
-fn brush_hits(
+pub(super) fn brush_hits(
     st: &BrushStroke,
     scene: &RenderScene,
     project: impl Fn(Vec3) -> Option<egui::Pos2>,

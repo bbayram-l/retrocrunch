@@ -1,6 +1,7 @@
 //! psx-forge desktop app shell: tabs, menus, palette library, preferences, drag & drop.
 
 mod blocks_tab;
+mod detail_panel;
 mod gpu;
 mod model_tab;
 mod rig_panel;

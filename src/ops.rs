@@ -146,6 +146,10 @@ pub struct ModelOptions {
     pub hd_texture: bool,
     /// Remesh static models in Blender (voxel + QuadriFlow) before decimating.
     pub remesh: bool,
+    /// Keep more triangles/texels on the automatically found head (default on).
+    pub focus_face: bool,
+    /// Focus strength (default 4; 1 = off).
+    pub focus_strength: Option<f32>,
 }
 
 impl Default for ModelOptions {
@@ -174,6 +178,8 @@ impl Default for ModelOptions {
             preset: None,
             hd_texture: false,
             remesh: false,
+            focus_face: true,
+            focus_strength: None,
         }
     }
 }
@@ -255,6 +261,7 @@ pub fn convert_model(o: &ModelOptions, progress: process::Progress) -> Result<Va
             "hidden_removed": c.stats.hidden_removed,
             "subdivided_added": c.stats.subdivided_added,
             "atlas": c.stats.atlas.map(|(n, charts)| json!({"size": n, "charts": charts})),
+            "focus": c.stats.focus,
             "recommended_min_tris": c.stats.recommended_min_tris,
             "textures": c.stats.textures.iter().map(|t| json!({"material": t.0, "width": t.1, "height": t.2, "colors": t.3})).collect::<Vec<_>>(),
         },
@@ -354,6 +361,15 @@ pub fn model_settings(
     }
     if set(o.remesh != d.remesh) {
         s.remesh = o.remesh;
+    }
+    if set(o.focus_face != d.focus_face) {
+        s.focus_face = o.focus_face;
+    }
+    if let Some(k) = o
+        .focus_strength
+        .filter(|_| set(o.focus_strength != d.focus_strength))
+    {
+        s.focus_strength = k;
     }
     Ok(s)
 }

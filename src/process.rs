@@ -118,6 +118,13 @@ pub struct ConvertSettings {
     /// Gutter between atlas charts, in texels.
     #[serde(default = "default_atlas_padding")]
     pub atlas_padding: u32,
+    /// Detail focus: find the head/face automatically (head bones on rigs, else the
+    /// shape of an upright character) and keep more triangles and texels there.
+    /// Painted detail (`Piece::detail`) applies either way.
+    pub focus_face: bool,
+    /// How much more the focus area keeps: collapse cost up to this squared, texel
+    /// density up to this many times. 1 = off.
+    pub focus_strength: f32,
     /// Rebuild static models as an even, closed surface before decimation (Blender voxel
     /// remesh + QuadriFlow): fewer long slivers, so less affine warping and smoother
     /// vertex lighting; repairs scans. Textures are rebaked into a fresh atlas.
@@ -150,6 +157,8 @@ impl Default for ConvertSettings {
             hd_texture: false,
             remesh: false,
             remesh_density: 3.0,
+            focus_face: true,
+            focus_strength: 4.0,
             texture: CrunchSettings::default(),
             sizing: TextureSizing::Fixed,
             texel_cm: 2.0,
@@ -194,6 +203,8 @@ pub struct Stats {
     /// Fresh atlas, if one was made: (size in texels, number of charts).
     pub atlas: Option<(u32, usize)>,
     pub textures: Vec<(String, u32, u32, usize)>,
+    /// Detail focus sources used ("head", "painted").
+    pub focus: Vec<String>,
     pub warnings: Vec<String>,
 }
 
@@ -492,9 +503,25 @@ pub fn convert(
     } else {
         s.target_tris
     };
+    let field = crate::detail::DetailField::for_model(model, s.focus_face);
+    let k = if field.is_empty() {
+        1.0
+    } else {
+        s.focus_strength.max(1.0)
+    };
+    if !field.regions.is_empty() {
+        stats.focus.push("head".into());
+    }
+    if model.pieces.iter().any(|p| !p.detail.is_empty()) {
+        stats.focus.push("painted".into());
+    }
+    // Pieces in the focus area (a separate head mesh) get a bigger share of the budget.
     let info: Vec<(usize, f32, f32)> = src
         .iter()
-        .map(|p| (p.tri_count(), p.surface_area(), piece_weight(model, ps, p)))
+        .map(|p| {
+            let w = piece_weight(model, ps, p) * (1.0 + (k - 1.0) * field.mean(p));
+            (p.tri_count(), p.surface_area(), w)
+        })
         .collect();
     let targets = decimate::distribute_budget(budget.max(1), &info);
     if model.is_rigged() {
@@ -517,7 +544,12 @@ pub fn convert(
             &format!("Decimating {}", p.name),
             0.05 + 0.45 * i as f32 / src.len().max(1) as f32,
         );
-        let mut d = decimate::decimate(p, t, &dopt);
+        let priority: Vec<f32> = if k > 1.0 {
+            p.vertices.iter().map(|v| field.at(v.pos)).collect()
+        } else {
+            Vec::new()
+        };
+        let mut d = decimate::decimate_with_detail(p, t, &dopt, &priority, k);
         if d.vertices.iter().all(|v| v.normal == Vec3::ZERO) {
             d.recompute_normals();
         }
@@ -577,7 +609,8 @@ pub fn convert(
         } else {
             s.atlas_padding
         };
-        match bake::unwrap_atlas(&mut pieces, n, pad, s.chart_angle) {
+        match bake::unwrap_atlas_with_detail(&mut pieces, n, pad, s.chart_angle, Some((&field, k)))
+        {
             Some(u) => {
                 for (sh, r) in shade.iter_mut().zip(&u.remap) {
                     if !r.is_empty() {
