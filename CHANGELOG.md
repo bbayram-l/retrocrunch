@@ -27,6 +27,12 @@ All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format fo
   sRGB transfer curve is shared by the rasterizer, palettes and CRT pass, and the
   remaining clippy warnings are fixed.
 
+### Fixed
+- Detail focus could destroy a model when the rest of the mesh resisted reduction (UV
+  seams everywhere, as on photoscans): the focus area itself was collapsed to meet the
+  budget. A photoscanned gas mask at 600 triangles came out in scattered fragments; it
+  now keeps the mask, hose and canister. Models that never hit this convert exactly as before.
+
 ## [0.8.0] - 2026-11-04
 
 Eight experimental features.

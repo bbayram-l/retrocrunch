@@ -110,7 +110,19 @@ pub fn decimate_with_detail(
                 .map(|(&f, &k)| if k { SimplifyVertex::Lock } else { f })
                 .collect();
             let rest_target = target_tris - focus_budget + focus_tris;
-            let pass1 = simplify(piece, &piece.indices, &locks, rest_target, opt, false);
+            let pass1 = simplify(
+                piece,
+                &piece.indices,
+                &locks,
+                rest_target,
+                focus_tris,
+                opt,
+                false,
+            );
+            // If the rest couldn't get down to its share, the overshoot must not come out
+            // of the focus area: aiming pass 2 at the plain total would collapse it whole.
+            let rest_kept = (pass1.len() / 3).saturating_sub(focus_tris);
+            let pass2_target = target_tris.max(rest_kept + focus_budget);
             // Pass 2: freeze the rest except where it touches the focus area, so the
             // border can still collapse and the two sides stay connected.
             let mut free = focus.clone();
@@ -126,9 +138,9 @@ pub fn decimate_with_detail(
                 .zip(&free)
                 .map(|(&f, &k)| if k { f } else { SimplifyVertex::Lock })
                 .collect();
-            simplify(piece, &pass1, &locks, target_tris, opt, false)
+            simplify(piece, &pass1, &locks, pass2_target, 0, opt, false)
         }
-        None => simplify(piece, &piece.indices, &flags, target_tris, opt, true),
+        None => simplify(piece, &piece.indices, &flags, target_tris, 0, opt, true),
     };
     if indices.is_empty() {
         indices = piece.indices.clone();
@@ -172,12 +184,14 @@ fn focus_split(
     Some((focus, budget))
 }
 
-/// One meshopt reduction of `indices` to about `target_tris`.
+/// One meshopt reduction of `indices` to about `target_tris`. `frozen_tris` of them are
+/// locked in place and can't change: a stall is judged on the rest.
 fn simplify(
     piece: &Piece,
     indices: &[u32],
     locks: &[SimplifyVertex],
     target_tris: usize,
+    frozen_tris: usize,
     opt: &DecimateOptions,
     allow_sloppy: bool,
 ) -> Vec<u32> {
@@ -216,8 +230,10 @@ fn simplify(
     };
     let mut out = run(base);
     // Topology (UV seams, borders) can stall the collapse well above target:
-    // relax seam protection, then fall back to sloppy clustering.
-    if out.len() > target_idx * 5 / 4 {
+    // relax seam protection, then fall back to sloppy clustering. A large frozen area
+    // would hide a stall in the rest, so it doesn't count.
+    let frozen = frozen_tris * 3;
+    if out.len().saturating_sub(frozen) > target_idx.saturating_sub(frozen) * 5 / 4 {
         out = run(base | SimplifyOptions::Permissive);
     }
     // Sloppy clustering ignores locks and merges vertices across joints and morph
@@ -351,6 +367,72 @@ mod tests {
             "no cracks along the focus border: {} open edges vs {} plain",
             open_edges(&focused),
             open_edges(&plain)
+        );
+    }
+
+    /// A dense sphere on top of a thin "hose" of unwelded quads. Every hose corner is a UV
+    /// seam (neighbouring quads use different UVs at the same position), so the hose
+    /// barely reduces until seams may collapse: like the hose of a photoscanned gas mask.
+    fn sphere_on_hose() -> (Piece, Vec<f32>) {
+        use crate::mesh::Vertex;
+        use glam::{Vec2, Vec3};
+        let mut p = uv_sphere(96);
+        for v in &mut p.vertices {
+            v.pos = v.pos * 0.3 + Vec3::new(0.0, 1.0, 0.0);
+        }
+        let (around, along, r) = (12u32, 20u32, 0.05f32);
+        for j in 0..along {
+            for i in 0..around {
+                let base = p.vertices.len() as u32;
+                let corners = [(i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1)];
+                for (k, &(a, b)) in corners.iter().enumerate() {
+                    let th = a as f32 / around as f32 * std::f32::consts::TAU;
+                    p.vertices.push(Vertex {
+                        pos: Vec3::new(
+                            r * th.cos(),
+                            0.7 - b as f32 / along as f32 * 1.4,
+                            r * th.sin(),
+                        ),
+                        normal: Vec3::new(th.cos(), 0.0, th.sin()),
+                        uv: Vec2::new((k % 3 != 0) as u8 as f32, (k >= 2) as u8 as f32),
+                        color: [1.0; 4],
+                        ..Default::default()
+                    });
+                }
+                p.indices
+                    .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+            }
+        }
+        let priority = p
+            .vertices
+            .iter()
+            .map(|v| if v.pos.y > 0.75 { 1.0 } else { 0.0 })
+            .collect();
+        (p, priority)
+    }
+
+    #[test]
+    fn focus_keeps_its_share_when_the_rest_resists_reduction() {
+        let (p, priority) = sphere_on_hose();
+        let focus_tris = |d: &Piece| {
+            d.indices
+                .chunks_exact(3)
+                .filter(|t| t.iter().all(|&i| d.vertices[i as usize].pos.y > 0.75))
+                .count()
+        };
+        let d = decimate_with_detail(&p, 600, &DecimateOptions::default(), &priority, 4.0);
+        // The sphere is ~90% of the weighted area, so it's owed ~540 of the 600 triangles.
+        // The stubborn hose must not take them: that collapsed whole focus areas.
+        assert!(
+            focus_tris(&d) >= 400,
+            "focus area crushed: {} triangles of {} total",
+            focus_tris(&d),
+            d.tri_count()
+        );
+        assert!(
+            d.tri_count() <= 750,
+            "budget roughly kept: {}",
+            d.tri_count()
         );
     }
 
