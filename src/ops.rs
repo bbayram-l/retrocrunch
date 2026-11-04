@@ -148,6 +148,10 @@ pub struct ModelOptions {
     pub hd_texture: bool,
     /// Remesh static models in Blender (voxel + QuadriFlow) before decimating.
     pub remesh: bool,
+    /// Rigged models: "off", "one-bone" (one bone per vertex) or "segments".
+    pub rigid: String,
+    /// Extra half-resolution levels of detail (0-4).
+    pub lods: u32,
     /// Keep more triangles/texels on the automatically found head (default on).
     pub focus_face: bool,
     /// Focus strength (default 4; 1 = off).
@@ -180,6 +184,8 @@ impl Default for ModelOptions {
             preset: None,
             hd_texture: false,
             remesh: false,
+            rigid: "off".into(),
+            lods: 0,
             focus_face: true,
             focus_strength: None,
         }
@@ -249,6 +255,9 @@ pub fn convert_model(o: &ModelOptions, progress: process::Progress) -> Result<Va
         es.fbx = f;
     }
     es.preview = o.preview;
+    if o.lods > 0 {
+        es.lods = o.lods.min(4);
+    }
     let dir = o.output_dir.join(export::sanitize(&model.name));
     let files = export::export_model(&c.model, &dir, &es)?;
     Ok(json!({
@@ -364,6 +373,14 @@ pub fn model_settings(
     }
     if set(o.remesh != d.remesh) {
         s.remesh = o.remesh;
+    }
+    if set(o.rigid != d.rigid) {
+        s.rigid = match o.rigid.to_ascii_lowercase().as_str() {
+            "off" | "smooth" => process::RigidMode::Off,
+            "one-bone" | "onebone" | "vertex" => process::RigidMode::OneBone,
+            "segments" | "rigid" => process::RigidMode::Segments,
+            other => bail!("unknown rigid mode '{other}' (off, one-bone, segments)"),
+        };
     }
     if set(o.focus_face != d.focus_face) {
         s.focus_face = o.focus_face;
@@ -635,6 +652,8 @@ pub struct BlocksJob {
     pub godot_collision: bool,
     /// Also save the resulting project JSON here.
     pub save_project: Option<PathBuf>,
+    /// Bake AO + sun shadows into the vertex colours (experimental).
+    pub light: Option<crate::blocks::LevelLight>,
 }
 
 impl Default for BlocksJob {
@@ -650,6 +669,7 @@ impl Default for BlocksJob {
             subdivide: 1,
             godot_collision: true,
             save_project: None,
+            light: None,
         }
     }
 }
@@ -709,13 +729,16 @@ pub fn build_blocks(o: &BlocksJob) -> Result<Value> {
             crate::blocks::default_atlas(16)
         }
     });
-    let model = w.to_model(
+    let mut model = w.to_model(
         &o.name,
         atlas.as_ref(),
         true,
         o.godot_collision,
         o.subdivide.max(1),
     );
+    if let Some(l) = &o.light {
+        l.bake(&mut model);
+    }
     let s = ExportSettings {
         godot_scene: false,
         indexed_png: false,
@@ -828,12 +851,24 @@ pub fn extract_palette(path: &Path, colors: usize, save: Option<&Path>) -> Resul
 /// Writes `<name>_sprites.png` and `<name>_sprites.json` (layout) into `out_dir`.
 pub fn render_sprites(input: &Path, out_dir: &Path, job: &export::SpriteSheetJob) -> Result<Value> {
     let model = Model::load(input)?;
-    let (sheet, info) = export::sprite_sheet(&model, job)?;
-    std::fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
     let stem = input
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("model");
+    write_sprite_sheet(&model, stem, out_dir, job)
+}
+
+/// Render and write a sprite sheet (PNG, JSON layout, Godot scene + billboard script).
+pub fn write_sprite_sheet(
+    model: &Model,
+    stem: &str,
+    out_dir: &Path,
+    job: &export::SpriteSheetJob,
+) -> Result<Value> {
+    let (sheet, info) = export::sprite_sheet(model, job)?;
+    std::fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
+    let stem = export::sanitize(stem);
+    let stem = stem.as_str();
     let png = out_dir.join(format!("{stem}_sprites.png"));
     sheet
         .save(&png)
@@ -846,11 +881,58 @@ pub fn render_sprites(input: &Path, out_dir: &Path, job: &export::SpriteSheetJob
         "columns": "animation frames",
     });
     std::fs::write(&meta, serde_json::to_string_pretty(&layout)?)?;
+    // Godot: AnimatedSprite3D scene + the direction-picking script.
+    let scene = out_dir.join(format!("{stem}_sprites.tscn"));
+    let png_name = png
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("sprites.png");
+    std::fs::write(&scene, export::godot_sprite_scene(stem, png_name, &info))?;
+    let script = out_dir.join(export::GODOT_BILLBOARD_SCRIPT_NAME);
+    std::fs::write(&script, export::GODOT_BILLBOARD_SCRIPT)?;
+    std::fs::write(
+        out_dir.join(format!("{stem}_sprites.png.import")),
+        export::godot_texture_import(false),
+    )?;
     Ok(json!({
-        "files": [png.display().to_string(), meta.display().to_string()],
+        "files": [png.display().to_string(), meta.display().to_string(), scene.display().to_string(), script.display().to_string()],
         "width": sheet.width(),
         "height": sheet.height(),
         "layout": info,
+    }))
+}
+
+/// Experimental: lay out textures (PNG files) in PS1 VRAM; optionally save a map image.
+pub fn vram_layout(inputs: &[PathBuf], map: Option<&Path>) -> Result<Value> {
+    let mut tex = Vec::new();
+    for p in inputs {
+        let img = image::open(p)
+            .with_context(|| format!("opening {}", p.display()))?
+            .to_rgba8();
+        let name = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("texture")
+            .to_string();
+        tex.push((
+            name,
+            img.width(),
+            img.height(),
+            crate::texture::count_colors(&img),
+        ));
+    }
+    let est = crate::vram::estimate(&tex);
+    let layout = crate::vram::layout(&tex);
+    if let Some(m) = map {
+        crate::vram::layout_image(&layout)
+            .save(m)
+            .with_context(|| format!("writing {}", m.display()))?;
+    }
+    Ok(json!({
+        "summary": est.summary(),
+        "estimate": est,
+        "layout": layout,
+        "map": map.map(|m| m.display().to_string()),
     }))
 }
 

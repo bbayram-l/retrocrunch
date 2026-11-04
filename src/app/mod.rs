@@ -548,6 +548,7 @@ impl PsxForgeApp {
         }
         self.model.quick_export_window(ctx, &mut self.shared);
         self.model.preset_window(ctx, &mut self.shared);
+        self.model.vram_window(ctx);
         if let Some(palette_library::Action::Use {
             name,
             colors,

@@ -92,6 +92,75 @@ impl Morph {
 }
 
 impl Piece {
+    /// One bone per vertex (no blending), like PS1 vertex skinning: each vertex follows
+    /// only its strongest joint. Joints move stiffly but the mesh stays closed.
+    pub fn single_bone_skinning(&mut self) -> bool {
+        if self.skin.is_none() {
+            return false;
+        }
+        for v in &mut self.vertices {
+            let k = (0..4)
+                .max_by(|&a, &b| v.weights[a].total_cmp(&v.weights[b]))
+                .unwrap_or(0);
+            v.joints = [v.joints[k], 0, 0, 0];
+            v.weights = [1.0, 0.0, 0.0, 0.0];
+        }
+        true
+    }
+
+    /// Split a skinned piece into rigid segments, like early PS1 characters: each
+    /// triangle follows the one joint with the most weight across its corners, and
+    /// corners shared by triangles of different joints are duplicated, so the segments
+    /// move as solid blocks (no stretching, visible seams at the joints). Returns the
+    /// number of segments.
+    pub fn rigid_segments(&mut self) -> usize {
+        if self.skin.is_none() {
+            return 0;
+        }
+        let mut map: std::collections::HashMap<(u32, u16), u32> = Default::default();
+        let mut order: Vec<usize> = Vec::new();
+        let mut verts: Vec<Vertex> = Vec::new();
+        let mut used: std::collections::BTreeSet<u16> = Default::default();
+        let mut indices = Vec::with_capacity(self.indices.len());
+        for t in self.indices.chunks_exact(3) {
+            let mut acc: Vec<(u16, f32)> = Vec::new();
+            for &i in t {
+                let v = &self.vertices[i as usize];
+                for k in 0..4 {
+                    if v.weights[k] > 0.0 {
+                        match acc.iter_mut().find(|a| a.0 == v.joints[k]) {
+                            Some(a) => a.1 += v.weights[k],
+                            None => acc.push((v.joints[k], v.weights[k])),
+                        }
+                    }
+                }
+            }
+            let joint = acc
+                .iter()
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+                .map_or(self.vertices[t[0] as usize].joints[0], |a| a.0);
+            used.insert(joint);
+            for &i in t {
+                let id = *map.entry((i, joint)).or_insert_with(|| {
+                    let mut v = self.vertices[i as usize];
+                    v.joints = [joint, 0, 0, 0];
+                    v.weights = [1.0, 0.0, 0.0, 0.0];
+                    verts.push(v);
+                    order.push(i as usize);
+                    verts.len() as u32 - 1
+                });
+                indices.push(id);
+            }
+        }
+        self.vertices = verts;
+        self.indices = indices;
+        for m in &mut self.morphs {
+            m.remap(&order);
+        }
+        self.detail.clear();
+        used.len()
+    }
+
     /// Remove triangles that reference vertices past the end of `vertices`.
     pub fn drop_invalid_triangles(&mut self) {
         let n = self.vertices.len();
@@ -1219,6 +1288,46 @@ pub(crate) mod tests {
             skin: None,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn rigid_segments_bind_every_vertex_to_one_joint() {
+        let mut p = uv_sphere(12);
+        p.skin = Some(0);
+        for v in &mut p.vertices {
+            // Blend between joints 0 (bottom) and 1 (top) across the equator.
+            let t = (v.pos.y * 2.0 + 0.5).clamp(0.0, 1.0);
+            v.joints = [0, 1, 0, 0];
+            v.weights = [1.0 - t, t, 0.0, 0.0];
+        }
+        let tris = p.tri_count();
+        let before = p.vertices.len();
+        assert_eq!(p.rigid_segments(), 2);
+        assert_eq!(p.tri_count(), tris);
+        assert!(p.vertices.len() > before, "border vertices duplicated");
+        assert!(p.vertices.iter().all(|v| v.weights == [1.0, 0.0, 0.0, 0.0]));
+        // A triangle never mixes joints.
+        for t in p.indices.chunks_exact(3) {
+            let j = p.vertices[t[0] as usize].joints[0];
+            assert!(t.iter().all(|&i| p.vertices[i as usize].joints[0] == j));
+        }
+        let mut stat = uv_sphere(4);
+        assert_eq!(stat.rigid_segments(), 0, "unskinned pieces are left alone");
+        // One bone per vertex: same vertices, no blending.
+        let mut q = uv_sphere(12);
+        q.skin = Some(0);
+        for v in &mut q.vertices {
+            v.joints = [0, 1, 0, 0];
+            v.weights = [0.3, 0.7, 0.0, 0.0];
+        }
+        let n = q.vertices.len();
+        assert!(q.single_bone_skinning());
+        assert_eq!(q.vertices.len(), n);
+        assert!(
+            q.vertices
+                .iter()
+                .all(|v| v.joints[0] == 1 && v.weights[0] == 1.0)
+        );
     }
 
     #[test]

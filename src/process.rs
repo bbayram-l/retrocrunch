@@ -58,6 +58,30 @@ fn default_atlas_padding() -> u32 {
     2
 }
 
+/// PS1-style stiff skinning for rigged models (experimental).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RigidMode {
+    /// Smooth skinning as in the source (up to 4 blended bones per vertex).
+    #[default]
+    Off,
+    /// One bone per vertex, no blending: stiff joints, closed mesh (later PS1 games).
+    OneBone,
+    /// Rigid per-bone segments that move as solid blocks, with seams at the joints
+    /// (early PS1 games, which modelled parts to overlap; continuous meshes show cracks).
+    Segments,
+}
+
+impl RigidMode {
+    pub const ALL: [RigidMode; 3] = [Self::Off, Self::OneBone, Self::Segments];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Smooth (source)",
+            Self::OneBone => "One bone per vertex",
+            Self::Segments => "Rigid segments",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TextureSizing {
     Fixed,
@@ -125,6 +149,8 @@ pub struct ConvertSettings {
     /// How much more the focus area keeps: collapse cost up to this squared, texel
     /// density up to this many times. 1 = off.
     pub focus_strength: f32,
+    /// Rigged models: PS1-style stiff skinning (see `RigidMode`).
+    pub rigid: RigidMode,
     /// Rebuild static models as an even, closed surface before decimation (Blender voxel
     /// remesh + QuadriFlow): fewer long slivers, so less affine warping and smoother
     /// vertex lighting; repairs scans. Textures are rebaked into a fresh atlas.
@@ -158,6 +184,7 @@ impl Default for ConvertSettings {
             remesh: false,
             remesh_density: 3.0,
             focus_face: true,
+            rigid: RigidMode::Off,
             focus_strength: 4.0,
             texture: CrunchSettings::default(),
             sizing: TextureSizing::Fixed,
@@ -835,6 +862,18 @@ pub fn convert(
         }
     }
 
+    let rigged = match s.rigid {
+        RigidMode::Off => true,
+        RigidMode::OneBone => pieces
+            .iter_mut()
+            .fold(false, |any, p| p.single_bone_skinning() | any),
+        RigidMode::Segments => pieces.iter_mut().map(Piece::rigid_segments).sum::<usize>() > 0,
+    };
+    if !rigged {
+        stats
+            .warnings
+            .push("Rigid skinning needs a rigged model: nothing changed.".into());
+    }
     if s.texture.alpha == texture::AlphaMode::Keep {
         stats.warnings.push("Semi-transparent texels are exported as RGBA; PS1 hardware only had 1-bit transparency.".into());
     }

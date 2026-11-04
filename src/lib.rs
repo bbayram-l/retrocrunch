@@ -10,6 +10,7 @@
 pub mod bake;
 pub mod blender;
 pub mod blocks;
+pub mod crt;
 pub mod decimate;
 pub mod detail;
 pub mod export;
@@ -19,6 +20,7 @@ pub mod mcp;
 pub mod mesh;
 pub mod ops;
 pub mod palette;
+pub mod palette_cycle;
 pub mod presets;
 pub mod process;
 pub mod raster;

@@ -460,30 +460,44 @@ pub fn is_path_like(name_or_path: &str) -> bool {
 }
 
 pub fn find(name_or_path: &str) -> Result<Preset> {
-    let p = Path::new(name_or_path);
-    if is_path_like(name_or_path) {
-        return read(p);
-    }
+    // Names first: several built-ins contain '/' ("NPC / enemy") and would otherwise
+    // be taken for paths. MCP sandboxes path-like values before this is reached.
     let (user, _) = load_user();
-    user.into_iter()
+    if let Some(p) = user
+        .into_iter()
         .chain(builtins())
         .find(|x| x.name.eq_ignore_ascii_case(name_or_path.trim()))
-        .with_context(|| {
-            let names: Vec<String> = builtins()
-                .into_iter()
-                .map(|b| b.name)
-                .chain(load_user().0.into_iter().map(|u| u.name))
-                .collect();
-            format!(
-                "no preset '{name_or_path}' (available: {})",
-                names.join(", ")
-            )
-        })
+    {
+        return Ok(p);
+    }
+    let path = Path::new(name_or_path);
+    if is_path_like(name_or_path) && path.is_file() {
+        return read(path);
+    }
+    Err(anyhow::anyhow!("not found")).with_context(|| {
+        let names: Vec<String> = builtins()
+            .into_iter()
+            .map(|b| b.name)
+            .chain(load_user().0.into_iter().map(|u| u.name))
+            .collect();
+        format!(
+            "no preset '{name_or_path}' (available: {})",
+            names.join(", ")
+        )
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builtin_names_with_slashes_are_names_not_paths() {
+        for b in builtins().iter().filter(|b| b.name.contains('/')) {
+            assert_eq!(find(&b.name).unwrap().name, b.name);
+        }
+        assert!(find("no such / preset").is_err());
+    }
 
     #[test]
     fn builtins_are_distinct_and_serialisable() {

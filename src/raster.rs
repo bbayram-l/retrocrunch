@@ -84,6 +84,11 @@ pub struct RasterOptions {
     /// Draw triangle edges (hidden-line: only visible edges) in this colour.
     #[serde(default)]
     pub wireframe: Option<[u8; 3]>,
+    /// Fixed-point (GTE) precision: view-space positions round to this grid (world
+    /// units) before projection, so vertices shift against each other as the camera
+    /// moves. 0 = off.
+    #[serde(default)]
+    pub gte_unit: f32,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -109,6 +114,7 @@ impl Default for RasterOptions {
             pbr: false,
             fog: None,
             wireframe: None,
+            gte_unit: 0.0,
         }
     }
 }
@@ -305,7 +311,12 @@ fn render_with_threads(
                 let i = t[k] as usize;
                 let p = call.positions[i];
                 ClipVert {
-                    clip: vp * p.extend(1.0),
+                    clip: if o.gte_unit > 0.0 {
+                        let q = view.transform_point3(p);
+                        proj * ((q / o.gte_unit).round() * o.gte_unit).extend(1.0)
+                    } else {
+                        vp * p.extend(1.0)
+                    },
                     uv: if has_uv { call.uvs[i] } else { Vec2::ZERO },
                     col: if has_col {
                         Vec4::from(call.colors[i])

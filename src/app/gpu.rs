@@ -24,6 +24,7 @@ uniform vec2 u_res;
 uniform int u_snap_on;
 uniform float u_snap;
 uniform float u_affine;
+uniform float u_gte;
 uniform int u_mode;
 out vec3 v_uvw;
 out vec4 v_colw;
@@ -31,12 +32,15 @@ out vec3 v_pos;
 out vec3 v_nrm;
 out float v_viewz;
 void main() {
-    if (u_mode == 2) { // background: full-screen triangle
+    if (u_mode == 2 || u_mode == 4) { // background / CRT pass: full-screen triangle
         gl_Position = vec4(a_pos.xy, 0.0, 1.0);
         v_uvw = vec3(0.0, 0.0, 1.0); v_colw = vec4(1.0); v_pos = vec3(0.0); v_nrm = vec3(0.0); v_viewz = 0.0;
         return;
     }
     vec4 vp = u_view * vec4(a_pos, 1.0);
+    if (u_gte > 0.0) { // fixed-point view space, like the PS1 GTE
+        vp.xyz = floor(vp.xyz / u_gte + 0.5) * u_gte;
+    }
     vec4 clip = u_proj * vp;
     if (u_snap_on == 1 && clip.w > 0.0) {
         vec2 ndc = clip.xy / clip.w;
@@ -90,6 +94,9 @@ uniform vec3 u_eye;
 uniform vec3 u_key;
 uniform vec3 u_fill;
 uniform vec3 u_wire;
+uniform vec2 u_vp_origin;
+uniform vec2 u_vp_size;
+uniform vec2 u_src_res;
 out vec4 frag;
 
 const float PI = 3.14159265;
@@ -111,6 +118,35 @@ vec3 environment(vec3 d, float blur) {
 vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
 
 void main() {
+    if (u_mode == 4) { // CRT upscale (same recipe as psx_forge::crt)
+        vec2 o = gl_FragCoord.xy - u_vp_origin;
+        vec2 uv = clamp(o / u_vp_size, 0.0, 0.9999);
+        float sx = uv.x * u_src_res.x;
+        float syf = uv.y * u_src_res.y;
+        int sy = int(floor(syf));
+        float fy = 1.0 - fract(syf); // texture rows run bottom-up; beam profile is symmetric
+        int maxx = int(u_src_res.x) - 1;
+        vec3 rgb;
+        for (int c = 0; c < 3; c++) {
+            float shift = float(c - 1) * 0.33;
+            float acc = 0.0;
+            for (int k = -1; k <= 1; k++) {
+                float x = sx + shift + float(k) * 0.6;
+                int xi = clamp(int(floor(x)), 0, maxx);
+                acc += (k == 0 ? 0.5 : 0.25) * lin(texelFetch(u_tex, ivec2(xi, sy), 0).rgb)[c];
+            }
+            rgb[c] = acc;
+        }
+        float beam = 1.0 - 0.45 * (1.0 - sin(PI * fy));
+        int phase = int(mod(floor(o.x), 3.0));
+        for (int c = 0; c < 3; c++) {
+            rgb[c] *= beam * 1.3 * (c == phase ? 1.0 : 0.78);
+        }
+        vec2 d = uv - 0.5;
+        rgb *= 1.0 - 0.35 * dot(d, d);
+        frag = vec4(srgb(clamp(rgb, 0.0, 1.0)), 1.0);
+        return;
+    }
     if (u_mode == 3) { // wireframe pass
         frag = vec4(u_wire, 1.0);
         return;
@@ -236,6 +272,10 @@ pub struct DrawParams {
     pub bg_bottom: [f32; 3],
     /// Edge colour for the wireframe overlay (0..1), None = off.
     pub wireframe: Option<[f32; 3]>,
+    /// Fixed-point view-space grid (world units), 0 = off.
+    pub gte_unit: f32,
+    /// Upscale through the CRT pass instead of a plain nearest blit.
+    pub crt: bool,
 }
 
 struct GpuMesh {
@@ -623,6 +663,7 @@ impl GpuState {
             gl.uniform_1_i32(u("u_snap_on").as_ref(), p.snap.is_some() as i32);
             gl.uniform_1_f32(u("u_snap").as_ref(), p.snap.unwrap_or(1.0).max(1.0));
             gl.uniform_1_f32(u("u_affine").as_ref(), p.affine);
+            gl.uniform_1_f32(u("u_gte").as_ref(), p.gte_unit);
             gl.uniform_1_i32(u("u_dither").as_ref(), p.dither as i32);
             gl.uniform_1_i32(u("u_color15").as_ref(), p.color15 as i32);
             match p.fog {
@@ -727,9 +768,41 @@ impl GpuState {
             gl.disable(glow::DEPTH_TEST);
             gl.disable(glow::CULL_FACE);
 
-            // Upscale with nearest filtering into egui's framebuffer.
+            // Upscale into egui's framebuffer: CRT pass, or plain nearest filtering.
             let vp = info.viewport_in_pixels();
             let clip = info.clip_rect_in_pixels();
+            if p.crt {
+                let tex = self.target.map(|t| t.1);
+                gl.bind_framebuffer(glow::FRAMEBUFFER, egui_fbo);
+                gl.viewport(vp.left_px, vp.from_bottom_px, vp.width_px, vp.height_px);
+                gl.enable(glow::SCISSOR_TEST);
+                gl.scissor(
+                    clip.left_px,
+                    clip.from_bottom_px,
+                    clip.width_px,
+                    clip.height_px,
+                );
+                gl.use_program(Some(prog));
+                gl.uniform_1_i32(u("u_mode").as_ref(), 4);
+                gl.uniform_2_f32(
+                    u("u_vp_origin").as_ref(),
+                    vp.left_px as f32,
+                    vp.from_bottom_px as f32,
+                );
+                gl.uniform_2_f32(
+                    u("u_vp_size").as_ref(),
+                    vp.width_px as f32,
+                    vp.height_px as f32,
+                );
+                gl.uniform_2_f32(u("u_src_res").as_ref(), w as f32, h as f32);
+                gl.uniform_1_i32(u("u_tex").as_ref(), 0);
+                gl.active_texture(glow::TEXTURE0);
+                gl.bind_texture(glow::TEXTURE_2D, tex);
+                gl.bind_vertex_array(self.bg_vao);
+                gl.draw_arrays(glow::TRIANGLES, 0, 3);
+                gl.bind_vertex_array(None);
+                return Ok(());
+            }
             gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(fb));
             gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, egui_fbo);
             gl.enable(glow::SCISSOR_TEST);

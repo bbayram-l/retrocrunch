@@ -78,6 +78,8 @@ pub fn tools() -> Vec<Value> {
                     "chart_angle": {"type": "number", "description": "Atlas chart crease angle in degrees. Default 60"},
                     "focus_face": {"type": "boolean", "description": "Default true: find the head (head bones, or the shape of an upright character) and keep more triangles and texels on the face"},
                     "focus_strength": {"type": "number", "description": "Extra detail for the face: collapse cost up to this squared, texel density up to this many times. Default 4, 1 = off"},
+                    "rigid": {"type": "string", "enum": ["off", "one-bone", "segments"], "description": "Rigged models, PS1-style stiff skinning. one-bone: each vertex follows one bone (stiff joints, closed mesh). segments: per-bone solid blocks with seams at the joints (early PS1 look; continuous meshes show cracks). Skeleton and clips are kept"},
+                    "lods": {"type": "integer", "description": "Extra levels of detail (0-4), each with half the triangles (<name>_lod1.glb...). Godot scenes of static models switch between them by distance"},
                     "remesh": {"type": "boolean", "description": "Static models only, needs Blender: voxel remesh + QuadriFlow before decimation for even triangles (less affine warping) and repaired scans. Textures are rebaked into a fresh atlas"},
                     "hd_texture": {"type": "boolean", "description": "HD texture: keep the source's texel density and full colour (no palette/dither/15-bit) on the low-poly model - pixel-sharp but high resolution. tex_size and colors are ignored"},
                     "preset": {"type": "string", "description": "Start from a preset (see list_presets), e.g. 'Hero character', 'Environment prop', 'Survival horror character'. Other arguments you pass override it"}
@@ -146,6 +148,7 @@ pub fn tools() -> Vec<Value> {
                 "output_dir": {"type": "string"}, "name": {"type": "string"},
                 "subdivide": {"type": "integer", "description": "Face grid N x N (1 = off)"},
                 "godot_collision": {"type": "boolean"},
+                "light": {"type": "object", "description": "Experimental: bake lighting into the vertex colours. Fields (all optional): ao (bool), ao_strength, sun (bool), sun_yaw, sun_pitch (degrees), sun_strength, ambient (light in shadow). {} uses the defaults: AO + a sun from the upper right"},
                 "save_project": {"type": "string"}
             }),
             &[],
@@ -155,6 +158,12 @@ pub fn tools() -> Vec<Value> {
             "Extract an N-colour, 15-bit-snapped palette from an image (hex list), optionally saving .hex/.gpl/.pal so every asset can share it.",
             json!({"path": {"type": "string"}, "colors": {"type": "integer"}, "save": {"type": "string"}}),
             &["path"],
+        ),
+        tool(
+            "vram_layout",
+            "Experimental: lay textures (PNG files, e.g. a level's converted textures) out in PS1 VRAM the way a game would: two 320x240 framebuffers, textures inside 256x256 texture pages (4/8-bit packed), CLUTs below the framebuffers. Reports placements, what doesn't fit and warnings; `map` saves a 1024x512 picture.",
+            json!({"inputs": {"type": "array", "items": {"type": "string"}}, "map": {"type": "string"}}),
+            &["inputs"],
         ),
         tool(
             "render_sprites",
@@ -300,6 +309,18 @@ pub fn call_tool(name: &str, args: &Value) -> Result<Vec<Value>> {
             ops::extract_palette(&str_arg(args, "path")?, colors, save.as_deref())?
         }
         "palettes" => palettes_tool(args)?,
+        "vram_layout" => {
+            let inputs: Vec<std::path::PathBuf> = args
+                .get("inputs")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_str).map(Into::into).collect())
+                .unwrap_or_default();
+            let map = args
+                .get("map")
+                .and_then(Value::as_str)
+                .map(std::path::PathBuf::from);
+            ops::vram_layout(&inputs, map.as_deref())?
+        }
         "render_sprites" => {
             let job: crate::export::SpriteSheetJob = serde_json::from_value(args.clone())?;
             let out = args
@@ -331,6 +352,7 @@ const PATH_KEYS: &[&str] = &[
     "project",
     "atlas",
     "save_project",
+    "map",
 ];
 
 /// Resolve `p` (relative to the current directory) without requiring it to exist:

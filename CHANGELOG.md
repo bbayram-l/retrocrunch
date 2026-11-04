@@ -6,6 +6,37 @@ All notable changes to psx-forge. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-04
+
+Eight experimental features.
+
+### Added
+- **CRT view**: viewport toggle (OpenGL pass and CPU) and `crt` on the Godot screen
+  pass: composite blur with colour bleed, scanlines, aperture grille, vignette.
+- **Fixed-point (GTE) wobble**: viewport toggle and `gte_unit` in the Godot shaders.
+  View-space positions round to a fixed grid before projection, so vertices shift
+  against each other as the camera moves, like the PS1 geometry chip.
+- **Automatic LODs**: `lods` (GUI Export, `--lods`, MCP) writes `<name>_lod1.glb`... with
+  half the triangles each; Godot scenes of static models switch by distance
+  (visibility ranges).
+- **PS1-style stiff skinning** for rigged models: one bone per vertex (closed mesh), or
+  rigid per-bone segments (`--rigid one-bone|segments`, MCP `rigid`).
+- **Sprite sheets to Godot**: `<name>_sprites.tscn` (AnimatedSprite3D, one animation per
+  direction, sized like the 3D model) and `psx_billboard.gd`, which plays the row that
+  faces the camera.
+- **VRAM layout packer**: textures placed in PS1 VRAM inside texture pages next to the
+  framebuffers, CLUTs below; a 1024x512 map (GUI Export > VRAM map, `psx-forge vram`,
+  MCP `vram_layout`).
+- **Baked lighting for block levels**: ambient occlusion and sun shadows in the vertex
+  colours (Blocks tab, MCP `build_blocks` `light`).
+- **Palette cycling**: rotate a range of palette entries over time (Texture tab preview);
+  exports an index PNG, a palette strip, Godot shaders (2D and 3D) and an animated GIF.
+
+### Fixed
+- Built-in presets with '/' in their name ("NPC / enemy", "Item / pickup",
+  "Boss / showcase", "Distant LOD / background") could not be used from the CLI or MCP
+  since 0.2.1: they were taken for file paths. Names are now matched first.
+
 ## [0.7.0] - 2026-11-04
 
 ### Added

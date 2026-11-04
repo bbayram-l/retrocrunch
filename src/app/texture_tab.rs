@@ -34,6 +34,34 @@ pub struct TextureTab {
     view_out: ImageView,
     #[serde(skip)]
     last_key: String,
+    /// Palette cycling preview (experimental).
+    #[serde(skip)]
+    cycle: Cycle,
+}
+
+/// Palette cycling state: entries `start..=end` of the result palette rotate.
+struct Cycle {
+    on: bool,
+    start: usize,
+    end: usize,
+    speed: f32,
+    indexed: Option<psx_forge::palette_cycle::Indexed>,
+    tex: TexSlot,
+    step: Option<i64>,
+}
+
+impl Default for Cycle {
+    fn default() -> Self {
+        Self {
+            on: false,
+            start: 0,
+            end: 3,
+            speed: 8.0,
+            indexed: None,
+            tex: TexSlot::default(),
+            step: None,
+        }
+    }
 }
 
 pub const IMAGE_EXTS: [&str; 6] = ["png", "jpg", "jpeg", "bmp", "tga", "gif"];
@@ -105,6 +133,9 @@ impl TextureTab {
             );
             self.tex_out.set(ctx, "tex_out", &r.0);
             self.result = Some(r);
+            // The palette changed: re-index for cycling.
+            self.cycle.indexed = None;
+            self.cycle.step = None;
         }
     }
 
@@ -145,6 +176,7 @@ impl TextureTab {
         ui.separator();
         let s = &mut self.settings;
         let mut do_save = false;
+        let mut do_cycle_export = false;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -212,6 +244,33 @@ impl TextureTab {
                         ui.selectable_value(&mut s.alpha, AlphaMode::Keep, "RGBA");
                     });
                 });
+                if let Some((_, pal)) = &self.result
+                    && !pal.is_empty()
+                {
+                    let c = &mut self.cycle;
+                    let last = pal.len() - 1;
+                    section(ui, "Palette cycling (experimental)", false, |ui| {
+                        hint(ui, "Rotate a range of palette entries over time (water, lava, lights). Entries are numbered as in the swatches below the image, from 0.");
+                        if ui.checkbox(&mut c.on, "Animate").changed() {
+                            c.step = None;
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label("entries");
+                            ui.add(egui::DragValue::new(&mut c.start).range(0..=last));
+                            ui.label("to");
+                            ui.add(egui::DragValue::new(&mut c.end).range(0..=last));
+                        });
+                        c.end = c.end.max(c.start).min(last);
+                        slider_f32(ui, "steps/s", &mut c.speed, -30.0..=30.0, 8.0, "Palette steps per second; negative runs the other way");
+                        if ui
+                            .button("Export cycle...")
+                            .on_hover_text("Index PNG + palette strip + Godot shaders (2D and 3D) + animated GIF")
+                            .clicked()
+                        {
+                            do_cycle_export = true;
+                        }
+                    });
+                }
                 section(ui, "Save", true, |ui| {
                     ui.checkbox(&mut self.indexed_png, "Indexed (CLUT) PNG");
                     if ui
@@ -237,6 +296,44 @@ impl TextureTab {
             });
         if do_save {
             self.save(sh);
+        }
+        if do_cycle_export {
+            self.export_cycle(sh);
+        }
+    }
+
+    fn ensure_indexed(&mut self) {
+        if self.cycle.indexed.is_none()
+            && let Some((img, pal)) = &self.result
+        {
+            self.cycle.indexed = Some(psx_forge::palette_cycle::index_image(img, pal));
+        }
+    }
+
+    fn export_cycle(&mut self, sh: &mut Shared) {
+        self.ensure_indexed();
+        let Some(ix) = &self.cycle.indexed else {
+            return;
+        };
+        let Some(dir) = rfd::FileDialog::new()
+            .set_title("Folder for the palette cycle")
+            .pick_folder()
+        else {
+            return;
+        };
+        let name = self
+            .path
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .and_then(|s| s.to_str())
+            .unwrap_or("texture")
+            .to_string();
+        let c = &self.cycle;
+        match psx_forge::palette_cycle::export(&dir, &name, ix, c.start, c.end, c.speed) {
+            Ok(files) => {
+                sh.status = format!("Palette cycle: {} files in {}", files.len(), dir.display())
+            }
+            Err(e) => sh.error = Some(format!("{e:#}")),
         }
     }
 
@@ -310,6 +407,28 @@ impl TextureTab {
         });
         let avail = ui.available_size();
         let half = egui::vec2((avail.x - 12.0) / 2.0, avail.y - 70.0);
+        // Palette cycling: show the current step of the animation instead of the result.
+        let mut shown = ho.clone();
+        if self.cycle.on && self.result.is_some() {
+            let ctx = ui.ctx().clone();
+            let step = (ctx.input(|i| i.time) * self.cycle.speed as f64).floor() as i64;
+            if self.cycle.step != Some(step) {
+                self.cycle.step = Some(step);
+                if self.cycle.indexed.is_none()
+                    && let Some((img, pal)) = &self.result
+                {
+                    self.cycle.indexed = Some(psx_forge::palette_cycle::index_image(img, pal));
+                }
+                if let Some(ix) = &self.cycle.indexed {
+                    let f = ix.frame(self.cycle.start, self.cycle.end, step);
+                    self.cycle.tex.set(&ctx, "tex_cycle", &f);
+                }
+            }
+            if let Some(h) = &self.cycle.tex.handle {
+                shown = h.clone();
+            }
+            ctx.request_repaint_after(std::time::Duration::from_millis(30));
+        }
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.label(
@@ -335,7 +454,7 @@ impl TextureTab {
                         .color(DIM),
                     );
                 }
-                self.view_out.show(ui, ho, out_size, half);
+                self.view_out.show(ui, &shown, out_size, half);
             });
         });
         if let Some((_, pal)) = out {

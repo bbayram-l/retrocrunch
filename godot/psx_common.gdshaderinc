@@ -19,6 +19,10 @@ group_uniforms ps1;
 uniform bool vertex_snap = true;
 // Virtual screen height the vertices snap to; the width follows the viewport's aspect.
 uniform float snap_lines = 240.0;
+// Fixed-point (GTE) precision: view-space positions round to this grid in world units
+// before projection, so vertices shift against each other as the camera moves, like
+// the PS1's geometry coprocessor. Try ~1/1000 of a character's height. 0 = off.
+uniform float gte_unit = 0.0;
 uniform bool affine_mapping = true;
 // 0 = perspective-correct, 1 = full PS1 warping. In between tames big polygons.
 uniform float affine_weight : hint_range(0.0, 1.0) = 1.0;
@@ -48,6 +52,9 @@ varying vec2 fog_w;
 
 void vertex() {
 	vec4 view_pos = MODELVIEW_MATRIX * vec4(VERTEX, 1.0);
+	if (gte_unit > 0.0) {
+		view_pos.xyz = floor(view_pos.xyz / gte_unit + 0.5) * gte_unit;
+	}
 	vec4 clip = PROJECTION_MATRIX * view_pos;
 	if (vertex_snap && clip.w > 0.0) {
 		vec2 res = vec2(round(snap_lines * VIEWPORT_SIZE.x / max(VIEWPORT_SIZE.y, 1.0)), snap_lines);

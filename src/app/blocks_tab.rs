@@ -45,6 +45,9 @@ pub struct BlocksTab {
     pub viewport: Viewport,
     pub godot_collision: bool,
     pub face_shading: bool,
+    /// Bake AO + sun shadows into the vertex colours on export (experimental).
+    pub bake_light: bool,
+    pub light: psx_forge::blocks::LevelLight,
     pub glb: bool,
     pub obj: bool,
     /// Split each block face into an N x N grid (1 = off) to limit affine warping.
@@ -99,6 +102,8 @@ impl Default for BlocksTab {
             viewport,
             godot_collision: true,
             face_shading: true,
+            bake_light: false,
+            light: Default::default(),
             glb: true,
             obj: false,
             subdivisions: 2,
@@ -336,6 +341,22 @@ impl BlocksTab {
                 });
                 ui.checkbox(&mut self.godot_collision, "Godot collision (-col node)").on_hover_text("Godot generates a StaticBody3D + trimesh collider for nodes ending in -col");
                 ui.checkbox(&mut self.face_shading, "Bake face shading into vertex colours");
+                ui.checkbox(&mut self.bake_light, "Bake lighting on export (experimental)")
+                    .on_hover_text("Ray-traced ambient occlusion and sun shadows in the vertex colours, like pre-lit PS1 levels");
+                if self.bake_light {
+                    let l = &mut self.light;
+                    ui.checkbox(&mut l.ao, "Ambient occlusion");
+                    if l.ao {
+                        ui.add(egui::Slider::new(&mut l.ao_strength, 0.0..=1.0).text("AO strength"));
+                    }
+                    ui.checkbox(&mut l.sun, "Sun with shadows");
+                    if l.sun {
+                        ui.add(egui::Slider::new(&mut l.sun_yaw, -180.0..=180.0).text("sun yaw"));
+                        ui.add(egui::Slider::new(&mut l.sun_pitch, 5.0..=90.0).text("sun height"));
+                        ui.add(egui::Slider::new(&mut l.sun_strength, 0.0..=1.5).text("sun strength"));
+                        ui.add(egui::Slider::new(&mut l.ambient, 0.0..=1.0).text("shadow light"));
+                    }
+                }
                 ui.horizontal(|ui| {
                     ui.label("Face grid");
                     for n in [1u32, 2, 3, 4] {
@@ -473,13 +494,16 @@ impl BlocksTab {
             .unwrap_or("level")
             .to_string();
         self.world.tile_size = self.tile_size;
-        let model = self.world.to_model(
+        let mut model = self.world.to_model(
             &name,
             self.atlas.as_ref(),
             self.face_shading,
             self.godot_collision,
             self.subdivisions,
         );
+        if self.bake_light {
+            self.light.bake(&mut model);
+        }
         let s = ExportSettings {
             glb: self.glb,
             obj: self.obj,

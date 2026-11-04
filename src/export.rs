@@ -118,6 +118,11 @@ pub struct ExportSettings {
     /// Binary FBX converted from the GLB by headless Blender (rigs and clips kept).
     #[serde(default)]
     pub fbx: bool,
+    /// Extra levels of detail, each with half the triangles of the previous one
+    /// (`<name>_lod1.glb`, ...). Godot scenes of static models switch between them by
+    /// distance (visibility ranges). 0 = off.
+    #[serde(default)]
+    pub lods: u32,
 }
 
 fn yes() -> bool {
@@ -136,6 +141,7 @@ impl Default for ExportSettings {
             scale: 1.0,
             preview: true,
             fbx: false,
+            lods: 0,
         }
     }
 }
@@ -210,9 +216,15 @@ pub fn export_model(model: &Model, dir: &Path, s: &ExportSettings) -> Result<Vec
         written.push(p.with_extension("mtl"));
     }
     let mut warnings: Vec<String> = Vec::new();
+    let lod_count = s.lods.min(4);
     if s.glb || s.godot_scene || s.fbx {
         let p = dir.join(format!("{base}.glb"));
         std::fs::write(&p, glb_bytes(model, s.unlit)?)?;
+        for lod in lod_models(model, lod_count) {
+            let lp = dir.join(format!("{}.glb", sanitize(&lod.name)));
+            std::fs::write(&lp, glb_bytes(&lod, s.unlit)?)?;
+            written.push(lp);
+        }
         if s.fbx {
             let f = dir.join(format!("{base}.fbx"));
             match crate::blender::to_fbx(&p, &f) {
@@ -259,7 +271,7 @@ pub fn export_model(model: &Model, dir: &Path, s: &ExportSettings) -> Result<Vec
             }
         }
         let p = dir.join(format!("{base}.tscn"));
-        std::fs::write(&p, godot_scene(model))?;
+        std::fs::write(&p, godot_scene_lods(model, lod_count))?;
         written.push(p);
         if model.is_rigged() {
             let gd = dir.join(GODOT_APPLY_SCRIPT_NAME);
@@ -665,7 +677,34 @@ pub fn glb_bytes(model: &Model, unlit: bool) -> Result<Vec<u8>> {
 }
 
 /// Godot 4 scene instancing the GLB with the PSX shader on every mesh.
+/// Levels of detail for `model`: each halves the triangles of the previous one.
+pub fn lod_models(model: &Model, count: u32) -> Vec<Model> {
+    let mut out: Vec<Model> = Vec::new();
+    for i in 1..=count.min(4) {
+        let prev = out.last().unwrap_or(model);
+        let mut m = prev.clone();
+        m.name = format!("{}_lod{i}", model.name);
+        for p in &mut m.pieces {
+            let target = (p.tri_count() / 2).max(4);
+            *p = crate::decimate::decimate(p, target, &crate::decimate::DecimateOptions::default());
+        }
+        out.push(m);
+    }
+    out
+}
+
+/// Distance (world units) where LOD `i` hands over to LOD `i + 1`.
+pub fn lod_distance(model: &Model, i: u32) -> f32 {
+    let (lo, hi) = model.bounds();
+    (hi - lo).length().max(1e-3) * 6.0 * 2f32.powi(i as i32)
+}
+
 pub fn godot_scene(model: &Model) -> String {
+    godot_scene_lods(model, 0)
+}
+
+/// Godot scene; with `lods` > 0 (static models), LOD0..LODn instances switch by distance.
+pub fn godot_scene_lods(model: &Model, lods: u32) -> String {
     let base = sanitize(&model.name);
     let names = unique_names(model.pieces.iter().map(|p| p.name.clone()));
     let tex_files: Vec<Option<String>> = (0..model.materials.len())
@@ -682,6 +721,15 @@ pub fn godot_scene(model: &Model) -> String {
         "[ext_resource type=\"PackedScene\" path=\"{base}.glb\" id=\"1_glb\"]"
     )
     .ok();
+    // LOD scenes only for static models (skinned meshes move under the skeleton).
+    let lods = if model.is_rigged() { 0 } else { lods };
+    for level in 1..=lods {
+        writeln!(
+            s,
+            "[ext_resource type=\"PackedScene\" path=\"{base}_lod{level}.glb\" id=\"lod_{level}\"]"
+        )
+        .ok();
+    }
     for v in &variants {
         writeln!(
             s,
@@ -747,18 +795,53 @@ pub fn godot_scene(model: &Model) -> String {
         .ok();
         return s;
     }
-    writeln!(
-        s,
-        "[node name=\"{base}\" instance=ExtResource(\"1_glb\")]\n"
-    )
-    .ok();
-    for (p, name) in model.pieces.iter().zip(&names) {
-        let mi = p.material.unwrap_or(0).min(mats - 1);
+    if lods == 0 {
         writeln!(
             s,
-            "[node name=\"{name}\" parent=\".\"]\nmaterial_override = SubResource(\"mat_{mi}\")\n"
+            "[node name=\"{base}\" instance=ExtResource(\"1_glb\")]\n"
         )
         .ok();
+        for (p, name) in model.pieces.iter().zip(&names) {
+            let mi = p.material.unwrap_or(0).min(mats - 1);
+            writeln!(
+                s,
+                "[node name=\"{name}\" parent=\".\"]\nmaterial_override = SubResource(\"mat_{mi}\")\n"
+            )
+            .ok();
+        }
+        return s;
+    }
+    // LODs: every level is an instance; its meshes show only within their distance band.
+    writeln!(s, "[node name=\"{base}\" type=\"Node3D\"]\n").ok();
+    for level in 0..=lods {
+        let resource = if level == 0 {
+            "1_glb".to_string()
+        } else {
+            format!("lod_{level}")
+        };
+        writeln!(
+            s,
+            "[node name=\"LOD{level}\" parent=\".\" instance=ExtResource(\"{resource}\")]\n"
+        )
+        .ok();
+        let begin = if level == 0 {
+            0.0
+        } else {
+            lod_distance(model, level - 1)
+        };
+        let end = if level == lods {
+            0.0
+        } else {
+            lod_distance(model, level)
+        };
+        for (p, name) in model.pieces.iter().zip(&names) {
+            let mi = p.material.unwrap_or(0).min(mats - 1);
+            writeln!(
+                s,
+                "[node name=\"{name}\" parent=\"LOD{level}\"]\nmaterial_override = SubResource(\"mat_{mi}\")\nvisibility_range_begin = {begin}\nvisibility_range_end = {end}\n"
+            )
+            .ok();
+        }
     }
     s
 }
@@ -939,6 +1022,12 @@ pub struct SpriteSheetInfo {
     pub clip: Option<String>,
     pub frame_times: Vec<f32>,
     pub yaw_degrees: Vec<f32>,
+    /// World units per sprite pixel (Godot `pixel_size`) and the model point at the
+    /// centre of every cell, so a billboard matches the 3D model's size and position.
+    pub units_per_pixel: f32,
+    pub center: [f32; 3],
+    /// Frames per second that play the clip at its real speed.
+    pub fps: f32,
 }
 
 /// Render the model from `directions` angles x `frames` animation frames into one
@@ -1013,10 +1102,126 @@ pub fn sprite_sheet(
             directions: dirs,
             frames,
             clip: clip.and_then(|c| model.rig.as_ref().map(|r| r.clips[c].name.clone())),
+            fps: if duration > 0.0 {
+                frames as f32 / duration
+            } else {
+                1.0
+            },
             frame_times: times,
             yaw_degrees: yaws,
+            units_per_pixel: {
+                // OrbitCamera::frame_bounds: distance = r / sin(fov/2) * 1.1; the visible
+                // height at that distance is 2 * d * tan(fov/2).
+                let fov = crate::raster::OrbitCamera::default().fov_y;
+                let r = ((bounds.1 - bounds.0).length() * 0.5).max(1e-3);
+                let d = r / (fov * 0.5).sin() * 1.1;
+                2.0 * d * (fov * 0.5).tan() / cell as f32
+            },
+            center: ((bounds.0 + bounds.1) * 0.5).to_array(),
         },
     ))
+}
+
+pub const GODOT_BILLBOARD_SCRIPT_NAME: &str = "psx_billboard.gd";
+pub const GODOT_BILLBOARD_SCRIPT: &str = include_str!("../godot/psx_billboard.gd");
+
+/// Godot 4 scene for a sprite sheet: an AnimatedSprite3D (Y billboard, nearest
+/// filtering, alpha cut) with one animation per direction (`dir0`..), driven by
+/// `psx_billboard.gd`, which picks the row facing the camera.
+pub fn godot_sprite_scene(name: &str, png: &str, info: &SpriteSheetInfo) -> String {
+    let mut s = String::new();
+    let atlases = (info.directions * info.frames) as usize;
+    writeln!(
+        s,
+        "[gd_scene load_steps={} format=3]
+",
+        atlases + 4
+    )
+    .ok();
+    writeln!(
+        s,
+        "[ext_resource type=\"Texture2D\" path=\"{png}\" id=\"1_sheet\"]"
+    )
+    .ok();
+    writeln!(
+        s,
+        "[ext_resource type=\"Script\" path=\"{GODOT_BILLBOARD_SCRIPT_NAME}\" id=\"2_billboard\"]
+"
+    )
+    .ok();
+    for d in 0..info.directions {
+        for f in 0..info.frames {
+            writeln!(
+                s,
+                "[sub_resource type=\"AtlasTexture\" id=\"cell_{d}_{f}\"]
+atlas = ExtResource(\"1_sheet\")
+region = Rect2({}, {}, {}, {})
+",
+                f * info.cell,
+                d * info.cell,
+                info.cell,
+                info.cell
+            )
+            .ok();
+        }
+    }
+    let anims: Vec<String> = (0..info.directions)
+        .map(|d| {
+            let frames: Vec<String> = (0..info.frames)
+                .map(|f| {
+                    format!(
+                        "{{
+\"duration\": 1.0,
+\"texture\": SubResource(\"cell_{d}_{f}\")
+}}"
+                    )
+                })
+                .collect();
+            format!(
+                "{{
+\"frames\": [{}],
+\"loop\": true,
+\"name\": &\"dir{d}\",
+\"speed\": {}
+}}",
+                frames.join(", "),
+                info.fps
+            )
+        })
+        .collect();
+    writeln!(
+        s,
+        "[sub_resource type=\"SpriteFrames\" id=\"frames\"]
+animations = [{}]
+",
+        anims.join(", ")
+    )
+    .ok();
+    let c = info.center;
+    writeln!(
+        s,
+        "[node name=\"{}\" type=\"Node3D\"]
+",
+        sanitize(name)
+    )
+    .ok();
+    writeln!(
+        s,
+        "[node name=\"Sprite\" type=\"AnimatedSprite3D\" parent=\".\"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, {}, {}, {})
+pixel_size = {}
+billboard = 2
+alpha_cut = 1
+texture_filter = 0
+sprite_frames = SubResource(\"frames\")
+animation = &\"dir0\"
+autoplay = \"dir0\"
+script = ExtResource(\"2_billboard\")
+directions = {}",
+        c[0], c[1], c[2], info.units_per_pixel, info.directions
+    )
+    .ok();
+    s
 }
 
 pub const GODOT_APPLY_SCRIPT_NAME: &str = "psx_apply_materials.gd";
@@ -1229,6 +1434,35 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn lods_halve_triangles_and_godot_switches_by_distance() {
+        let mut m = model();
+        m.pieces[0] = crate::mesh::tests::uv_sphere(24);
+        m.pieces[0].material = Some(0);
+        let dir = std::env::temp_dir().join("psxforge_lod_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let s = ExportSettings {
+            lods: 2,
+            ..Default::default()
+        };
+        export_model(&m, &dir, &s).unwrap();
+        let tris = |f: &str| Model::load(&dir.join(f)).unwrap().tri_count();
+        let (t0, t1, t2) = (
+            tris("ball_test.glb"),
+            tris("ball_test_lod1.glb"),
+            tris("ball_test_lod2.glb"),
+        );
+        assert!(t1 * 3 / 2 < t0 && t2 * 3 / 2 < t1, "{t0} > {t1} > {t2}");
+        let scene = std::fs::read_to_string(dir.join("ball_test.tscn")).unwrap();
+        assert!(scene.contains("path=\"ball_test_lod2.glb\""));
+        assert!(
+            scene.contains("[node name=\"LOD1\" parent=\".\" instance=ExtResource(\"lod_1\")]")
+        );
+        let d0 = lod_distance(&m, 0);
+        assert!(scene.contains(&format!("visibility_range_end = {d0}")));
+        assert!(scene.contains(&format!("visibility_range_begin = {d0}")));
     }
 
     #[test]

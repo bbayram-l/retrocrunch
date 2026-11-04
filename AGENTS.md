@@ -87,11 +87,23 @@ Ready-made palettes: `palettes {}` lists 10 built-ins (PICO-8, Sweetie 16, DawnB
 Every export also writes `IMPORT_NOTES.txt` with engine-specific import steps, plus a
 320x240 `_preview.png`.
 
+## Experimental options
+
+- `convert_model`: `lods` (0-4) writes half-resolution LOD GLBs, and Godot scenes of
+  static models switch between them by distance. `rigid`: `"one-bone"` (stiff joints,
+  closed mesh) or `"segments"` (solid blocks per bone, seams) for rigged models.
+- `build_blocks`: `light: {}` bakes AO + sun shadows into the level's vertex colours
+  (fields: ao, ao_strength, sun, sun_yaw, sun_pitch, sun_strength, ambient).
+- `vram_layout {inputs: [pngs], map: "vram.png"}` places textures in PS1 VRAM (texture
+  pages, CLUTs, framebuffers) and reports what doesn't fit.
+
 ## Sprite sheets (experimental)
 
 `render_sprites {input, output_dir, directions: 8, size: 64, clip: "Walk", frames: 8}`
 renders a converted model into a transparent sheet (rows = directions, columns = frames)
-plus a JSON layout, for 2.5D billboard characters.
+plus a JSON layout, for 2.5D billboard characters. It also writes `<name>_sprites.tscn`
+(an AnimatedSprite3D at the model's scale) and `psx_billboard.gd`, which picks the
+row that faces the camera.
 
 ## Levels
 

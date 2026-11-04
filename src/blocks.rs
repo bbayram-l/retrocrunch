@@ -496,6 +496,59 @@ impl BlockWorld {
     }
 }
 
+/// Baked lighting for block levels (experimental): ambient occlusion and sun shadows
+/// multiplied into the vertex colours, like PS1 games pre-lit their levels.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct LevelLight {
+    pub ao: bool,
+    pub ao_strength: f32,
+    pub sun: bool,
+    /// Sun direction: yaw around +Y and elevation, in degrees.
+    pub sun_yaw: f32,
+    pub sun_pitch: f32,
+    pub sun_strength: f32,
+    /// Light in full shadow (with the sun on).
+    pub ambient: f32,
+}
+
+impl Default for LevelLight {
+    fn default() -> Self {
+        Self {
+            ao: true,
+            ao_strength: 0.8,
+            sun: true,
+            sun_yaw: 35.0,
+            sun_pitch: 55.0,
+            sun_strength: 0.7,
+            ambient: 0.45,
+        }
+    }
+}
+
+impl LevelLight {
+    /// Multiply the light into every vertex colour of `model` (alpha untouched).
+    pub fn bake(&self, model: &mut Model) {
+        let (y, p) = (self.sun_yaw.to_radians(), self.sun_pitch.to_radians());
+        let dir = glam::Vec3::new(p.cos() * y.sin(), p.sin(), p.cos() * y.cos()).normalize();
+        let cfg = crate::visibility::ShadeSettings {
+            ao: self.ao,
+            ao_strength: self.ao_strength,
+            ao_views: 64,
+            sun: self.sun.then_some((dir, self.sun_strength)),
+            ambient: if self.sun { self.ambient } else { 1.0 },
+        };
+        let shade = crate::visibility::vertex_shading(&model.pieces, &cfg);
+        for (piece, f) in model.pieces.iter_mut().zip(shade) {
+            for (v, k) in piece.vertices.iter_mut().zip(f) {
+                for c in 0..3 {
+                    v.color[c] = (v.color[c] * k).clamp(0.0, 1.0);
+                }
+            }
+        }
+    }
+}
+
 /// Procedural 4x4 starter atlas so the editor works without any assets.
 pub fn default_atlas(tile: u32) -> RgbaImage {
     let base: [[u8; 3]; 16] = [
@@ -647,6 +700,41 @@ pub fn raycast(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn baked_level_light_darkens_corners_and_shadows() {
+        let cube = |tile| {
+            Some(Block {
+                shape: Shape::Cube,
+                rot: 0,
+                flip: false,
+                tile,
+            })
+        };
+        let mut w = BlockWorld::default();
+        w.fill_box(IVec3::new(-6, 0, -6), IVec3::new(6, 0, 6), cube(0));
+        // A wall along x = 0 on the floor.
+        w.fill_box(IVec3::new(0, 1, -6), IVec3::new(0, 4, 6), cube(1));
+        let mut m = w.to_model("lit", None, false, false, 1);
+        let before: Vec<f32> = m.pieces[0].vertices.iter().map(|v| v.color[0]).collect();
+        LevelLight::default().bake(&mut m);
+        let p = &m.pieces[0];
+        // Top-of-floor vertices (y = 1) right next to the wall vs far from it.
+        let floor = |x: f32| {
+            p.vertices
+                .iter()
+                .zip(&before)
+                .filter(|(v, _)| {
+                    (v.pos.y - 1.0).abs() < 1e-3 && (v.pos.x - x).abs() < 1e-3 && v.normal.y > 0.9
+                })
+                .map(|(v, b)| v.color[0] / b.max(1e-3))
+                .fold(f32::MAX, f32::min)
+        };
+        let (corner, open) = (floor(0.0), floor(-5.0));
+        assert!(corner < open * 0.9, "corner {corner} vs open {open}");
+        assert!(p.vertices.iter().all(|v| (0.0..=1.0).contains(&v.color[0])));
+    }
+
     use super::*;
 
     #[test]

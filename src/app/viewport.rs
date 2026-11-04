@@ -266,6 +266,10 @@ pub struct Viewport {
     /// Draw triangle edges over the model.
     pub wireframe: bool,
     pub view: ViewMode,
+    /// Fixed-point (GTE) vertex precision.
+    pub gte: bool,
+    /// CRT / composite TV look.
+    pub crt: bool,
     #[serde(skip)]
     variant: Option<((u64, ViewMode), RenderScene)>,
     #[serde(skip)]
@@ -291,6 +295,8 @@ impl Default for Viewport {
             gpu: true,
             wireframe: false,
             view: ViewMode::Shaded,
+            gte: false,
+            crt: false,
             variant: None,
             gpu_state: SharedGpu::default(),
             tex: TexSlot::default(),
@@ -373,6 +379,11 @@ impl Viewport {
             ui.toggle_value(&mut self.fog, "Fog");
             ui.toggle_value(&mut self.turntable, "Turntable");
             ui.separator();
+            ui.toggle_value(&mut self.gte, "GTE").on_hover_text(
+                "Experimental: fixed-point vertex precision like the PS1's geometry chip. Vertices shift against each other as the camera moves (on top of Jitter)",
+            );
+            ui.toggle_value(&mut self.crt, "CRT")
+                .on_hover_text("Experimental: composite TV look (scanlines, colour bleed, aperture grille)");
             ui.toggle_value(&mut self.wireframe, "Wire")
                 .on_hover_text("Show triangle edges (only visible ones; they jitter with the mesh)");
             egui::ComboBox::from_id_salt(ui.id().with("view"))
@@ -482,7 +493,7 @@ impl Viewport {
             serde_json::to_string(&self.opts).unwrap_or_default(),
             scene.map_or(0, |s| s.generation),
             self.fog,
-            (extra.len(), reference, self.wireframe)
+            (extra.len(), reference, self.wireframe, self.gte, self.crt)
         );
         if key != self.last_key || self.frame_size != (fw, fh) || self.tex.handle.is_none() {
             self.last_key = key;
@@ -490,7 +501,7 @@ impl Viewport {
             let mut frame = Frame::new(fw, fh);
             frame.clear_gradient(self.bg_top, self.bg_bottom);
             // Reference view: modern PBR shading, none of the PS1 effects.
-            let opts = self.effective_opts(reference);
+            let opts = self.effective_opts(reference, scene);
             let mut calls: Vec<DrawCall> = Vec::new();
             if let Some(s) = scene {
                 for p in s.pieces.iter().chain(extra) {
@@ -498,7 +509,15 @@ impl Viewport {
                 }
             }
             raster::render(&mut frame, view, proj, &calls, &opts);
-            self.tex.set(ui.ctx(), "viewport", &frame.to_rgba());
+            let img = frame.to_rgba();
+            if self.crt {
+                // CRT scanlines need output resolution: upscale to about the screen size.
+                let scale = (rect.height() * ppp / fh as f32).round() as u32;
+                self.tex
+                    .set(ui.ctx(), "viewport", &psx_forge::crt::crt(&img, scale));
+            } else {
+                self.tex.set(ui.ctx(), "viewport", &img);
+            }
         }
         if let Some(h) = &self.tex.handle {
             ui.painter_at(rect).image(
@@ -517,7 +536,7 @@ impl Viewport {
         }
     }
 
-    fn effective_opts(&self, reference: bool) -> RasterOptions {
+    fn effective_opts(&self, reference: bool, scene: Option<&RenderScene>) -> RasterOptions {
         let mut opts = if reference {
             RasterOptions {
                 textured: self.opts.textured,
@@ -527,6 +546,10 @@ impl Viewport {
             self.opts.clone()
         };
         opts.wireframe = self.wireframe.then_some(WIRE);
+        // Fixed-point grid: 1/1024 of the model's size (PS1 games used integer units).
+        if self.gte && !reference {
+            opts.gte_unit = scene.map_or(0.0, |s| (s.hi - s.lo).length() / 1024.0);
+        }
         if self.fog && !reference {
             let d = self.cam.distance;
             opts.fog = Some(FogSettings {
@@ -572,7 +595,7 @@ impl Viewport {
         }
         // The CPU frame goes stale while the GPU draws; re-render it if we switch back.
         self.tex.clear();
-        let o = self.effective_opts(reference);
+        let o = self.effective_opts(reference, scene);
         let f = |c: [u8; 3]| c.map(|v| v as f32 / 255.0);
         let params = DrawParams {
             view,
@@ -593,6 +616,8 @@ impl Viewport {
             bg_top: f(self.bg_top),
             bg_bottom: f(self.bg_bottom),
             wireframe: o.wireframe.map(|c| c.map(|v| v as f32 / 255.0)),
+            gte_unit: o.gte_unit,
+            crt: self.crt,
         };
         let state = self.gpu_state.clone();
         let ctx = ui.ctx().clone();

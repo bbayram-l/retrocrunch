@@ -52,6 +52,14 @@ enum Cmd {
         #[arg(long)]
         save: Option<PathBuf>,
     },
+    /// Experimental: lay textures out in PS1 VRAM (texture pages, CLUTs, framebuffers)
+    /// and optionally save a 1024x512 map image.
+    Vram {
+        images: Vec<PathBuf>,
+        /// Save the VRAM map PNG here.
+        #[arg(long)]
+        map: Option<PathBuf>,
+    },
     /// Experimental: render a model from 8 (or N) directions, optionally animated, into a
     /// transparent sprite sheet for 2.5D billboard characters.
     Sprites(SpritesArgs),
@@ -266,6 +274,13 @@ struct ModelArgs {
     /// Don't look for a head/face to keep extra detail on.
     #[arg(long)]
     no_face_focus: bool,
+    /// Rigged models, PS1-style stiff skinning: one-bone (one bone per vertex, closed
+    /// mesh) or segments (solid per-bone blocks, seams at the joints).
+    #[arg(long, default_value = "off")]
+    rigid: String,
+    /// Extra levels of detail, each half the triangles (Godot scenes switch by distance).
+    #[arg(long, default_value_t = 0)]
+    lods: u32,
     /// How much extra detail the face keeps [default: 4; 1 = off].
     #[arg(long)]
     focus_strength: Option<f32>,
@@ -526,11 +541,38 @@ fn main() -> Result<()> {
                 hd_texture: a.hd_texture,
                 remesh: a.remesh,
                 focus_face: !a.no_face_focus,
+                rigid: a.rigid,
+                lods: a.lods,
                 focus_strength: a.focus_strength,
             };
             ops::convert_model(&o, &progress)?
         }
         Some(Cmd::Inspect { path }) => ops::inspect_model(&path)?,
+        Some(Cmd::Vram { images, map }) => {
+            let v = ops::vram_layout(&images, map.as_deref())?;
+            if !json {
+                println!("{}", v["summary"].as_str().unwrap_or(""));
+                for p in v["layout"]["placements"].as_array().into_iter().flatten() {
+                    println!(
+                        "{:<12} {:<28} at ({:>4},{:>3}) {}x{} words",
+                        p["kind"].as_str().unwrap_or(""),
+                        p["name"].as_str().unwrap_or(""),
+                        p["x"],
+                        p["y"],
+                        p["w"],
+                        p["h"]
+                    );
+                }
+                for u in v["layout"]["unplaced"].as_array().into_iter().flatten() {
+                    println!("does not fit: {}", u.as_str().unwrap_or(""));
+                }
+                for w in v["estimate"]["warnings"].as_array().into_iter().flatten() {
+                    println!("warning: {}", w.as_str().unwrap_or(""));
+                }
+                return Ok(());
+            }
+            v
+        }
         Some(Cmd::Sprites(a)) => ops::render_sprites(
             &a.input,
             &a.out,

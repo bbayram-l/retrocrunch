@@ -15,6 +15,8 @@ extends Control
 @export var dither := true
 ## Levels per channel: 32 = 15-bit RGB555, 256 = off.
 @export var color_levels := 32.0
+## Experimental CRT look: scanlines, composite colour bleed, aperture grille.
+@export var crt := false
 ## Switch off per-pixel dither/colour depth in psx-forge materials under this node, so
 ## they aren't applied twice.
 @export var take_over_materials := true
@@ -64,6 +66,7 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	_post.set_shader_parameter("dither", dither)
 	_post.set_shader_parameter("color_levels", color_levels)
+	_post.set_shader_parameter("crt", crt)
 
 
 func _adopt(child: Node) -> void:

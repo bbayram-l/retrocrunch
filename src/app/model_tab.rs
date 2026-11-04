@@ -76,6 +76,8 @@ pub struct ModelTab {
     /// Sprite sheet settings (experimental).
     pub sprites: psx_forge::export::SpriteSheetJob,
     #[serde(skip)]
+    vram_map: Option<(TexSlot, psx_forge::vram::VramLayout)>,
+    #[serde(skip)]
     rig_min_tris: usize,
     #[serde(skip)]
     source: Option<Arc<Model>>,
@@ -149,6 +151,7 @@ impl Default for ModelTab {
             rig: RigEditor::default(),
             detail: DetailEditor::default(),
             sprites: Default::default(),
+            vram_map: None,
             rig_min_tris: 0,
         }
     }
@@ -857,6 +860,20 @@ impl ModelTab {
                 );
             }
             hint(ui, "PS1 reference: props 100-500, characters 300-1500.");
+            if animated {
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt("rigid")
+                        .selected_text(s.rigid.label())
+                        .show_ui(ui, |ui| {
+                            for m in process::RigidMode::ALL {
+                                ui.selectable_value(&mut s.rigid, m, m.label());
+                            }
+                        });
+                    ui.label("skinning");
+                })
+                .response
+                .on_hover_text("Experimental, PS1-style stiff skinning. One bone per vertex: stiff joints, closed mesh (later PS1 games). Rigid segments: body parts move as solid blocks with seams at the joints (early PS1 games, whose parts were modelled to overlap; continuous meshes show cracks).");
+            }
             ui.add_enabled_ui(!animated, |ui| {
                 ui.checkbox(&mut s.remesh, "Remesh first (Blender)").on_hover_text(
                     "Rebuild the model as one even, closed surface (voxel remesh + QuadriFlow)                      before reducing: far fewer long slivers, so less affine texture warping and                      smoother vertex lighting; repairs messy scans. Textures are rebaked into a                      new atlas. Needs Blender; static models only.",
@@ -1328,6 +1345,10 @@ impl ModelTab {
             ui.checkbox(&mut self.export.indexed_png, "Indexed (CLUT) PNG");
             ui.checkbox(&mut self.export.unlit, "Unlit material");
             ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut self.export.lods).range(0..=4).prefix("LODs "))
+                    .on_hover_text("Experimental: extra levels of detail, each with half the triangles. Godot scenes of static models switch between them by distance.");
+            });
+            ui.horizontal(|ui| {
                 ui.label("Scale");
                 ui.add(
                     egui::DragValue::new(&mut self.export.scale)
@@ -1348,6 +1369,19 @@ impl ModelTab {
                 self.export_dialog(sh);
             }
             ui.add_space(6.0);
+            if ui
+                .add_enabled(ready, egui::Button::new("VRAM map (experimental)..."))
+                .on_hover_text(
+                    "Lay the textures out in PS1 VRAM: texture pages, CLUTs, framebuffers",
+                )
+                .clicked()
+                && let Some(c) = &self.converted
+            {
+                let l = psx_forge::vram::layout(&c.stats.textures);
+                let mut slot = TexSlot::default();
+                slot.set(ui.ctx(), "vram_map", &psx_forge::vram::layout_image(&l));
+                self.vram_map = Some((slot, l));
+            }
             ui.collapsing("Sprite sheet (experimental)", |ui| {
                 hint(
                     ui,
@@ -1384,25 +1418,14 @@ impl ModelTab {
             .anim_clip
             .and_then(|i| c.model.rig.as_ref().and_then(|r| r.clips.get(i)))
             .map(|clip| clip.name.clone());
-        match psx_forge::export::sprite_sheet(&c.model, &job) {
-            Ok((sheet, info)) => {
-                let png = dir.join(format!("{}_sprites.png", c.model.name));
-                let meta = dir.join(format!("{}_sprites.json", c.model.name));
-                let res = sheet.save(&png).map_err(anyhow::Error::from).and_then(|_| {
-                    std::fs::write(&meta, serde_json::to_string_pretty(&info)?)?;
-                    Ok(())
-                });
-                match res {
-                    Ok(()) => {
-                        sh.status = format!(
-                            "Sprite sheet: {} directions x {} frames -> {}",
-                            info.directions,
-                            info.frames,
-                            png.display()
-                        )
-                    }
-                    Err(e) => sh.error = Some(format!("{e:#}")),
-                }
+        match psx_forge::ops::write_sprite_sheet(&c.model, &c.model.name, &dir, &job) {
+            Ok(v) => {
+                sh.status = format!(
+                    "Sprite sheet: {} directions x {} frames (+ Godot scene) in {}",
+                    v["layout"]["directions"],
+                    v["layout"]["frames"],
+                    dir.display()
+                )
             }
             Err(e) => sh.error = Some(format!("{e:#}")),
         }
@@ -1618,6 +1641,44 @@ impl ModelTab {
                     }
                 });
             });
+        }
+    }
+
+    pub fn vram_window(&mut self, ctx: &egui::Context) {
+        let Some((slot, l)) = &self.vram_map else {
+            return;
+        };
+        let mut open = true;
+        egui::Window::new("PS1 VRAM map (experimental)")
+            .open(&mut open)
+            .resizable(false)
+            .show(ctx, |ui| {
+                if let Some(h) = &slot.handle {
+                    ui.add(egui::Image::new((h.id(), egui::vec2(768.0, 384.0))).texture_options(egui::TextureOptions::NEAREST));
+                }
+                hint(ui, "1024 x 512 words. Grey: framebuffers. Coloured: textures (texture-page grid every 64 words, 256 lines). Yellow: CLUTs.");
+                for p in l.placements.iter().filter(|p| p.kind != "framebuffer") {
+                    ui.label(
+                        RichText::new(format!(
+                            "{:<8} {}  at ({}, {})  {}x{} words{}",
+                            p.kind,
+                            p.name,
+                            p.x,
+                            p.y,
+                            p.w,
+                            p.h,
+                            p.page.map_or(String::new(), |(x, y)| format!("  page ({x}, {y}) {}-bit", p.bits))
+                        ))
+                        .monospace()
+                        .small(),
+                    );
+                }
+                for u in &l.unplaced {
+                    ui.label(RichText::new(format!("does not fit: {u}")).color(WARN));
+                }
+            });
+        if !open {
+            self.vram_map = None;
         }
     }
 
