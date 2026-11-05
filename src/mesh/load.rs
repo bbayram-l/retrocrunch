@@ -89,9 +89,12 @@ fn check_gltf_uris(path: &Path) -> Result<()> {
         }
         let decoded = percent_decode(&uri);
         let dir = path.parent().unwrap_or(Path::new("."));
-        let as_given = dir.join(decoded.replace('\\', "/"));
-        let safe =
-            safe_local_path(dir, &decoded).is_some_and(|p| p == as_given) && !decoded.contains(':');
+        // The glTF loader opens the URI exactly as written, so check that path, not a
+        // normalised one. URIs must use '/', and on macOS/Linux "a\b.bin" would be a
+        // different file (perhaps a symlink) than the "a/b.bin" the guard looks at.
+        let safe = !decoded.contains('\\')
+            && !decoded.contains(':')
+            && safe_local_path(dir, &decoded).is_some_and(|p| p == dir.join(&decoded));
         if !safe {
             bail!(
                 "{} references '{uri}' outside its folder; refusing to follow it",

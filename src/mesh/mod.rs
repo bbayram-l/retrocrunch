@@ -793,6 +793,17 @@ pub(crate) mod tests {
                 .to_string()
                 .contains("outside its folder")
         );
+        // Backslashes: on macOS/Linux the loader would open a different file than the
+        // one the guard checked, so they're refused outright (plain and %5C-encoded).
+        for uri in [r"sub\\b.bin", "sub%5Cb.bin"] {
+            std::fs::write(
+                &p,
+                format!(r#"{{"asset":{{"version":"2.0"}},"buffers":[{{"uri":"{uri}","byteLength":4}}]}}"#),
+            )
+            .unwrap();
+            let err = Model::load(&p).unwrap_err().to_string();
+            assert!(err.contains("outside its folder"), "{uri}: {err}");
+        }
     }
 
     #[test]
