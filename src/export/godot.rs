@@ -261,6 +261,7 @@ pub const GODOT_APPLY_SCRIPT: &str = include_str!("../../godot/psx_apply_materia
 pub const GODOT_COMMON_SHADER: &str = include_str!("../../godot/psx_common.gdshaderinc");
 pub const GODOT_SCREEN_SCRIPT: &str = include_str!("../../godot/psx_screen.gd");
 pub const GODOT_POST_SHADER: &str = include_str!("../../godot/psx_post.gdshader");
+pub const GODOT_SPEED_SCRIPT: &str = include_str!("../../godot/psx_speed_limit.gd");
 
 /// How a material's alpha is drawn.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]

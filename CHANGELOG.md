@@ -14,6 +14,14 @@ All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format fo
 - The convert report's `atlas` shows `fill_percent`, the share of the atlas the model
   actually covers. Everything else is padding and gaps that still cost VRAM. The GUI
   shows it under the atlas settings.
+- Godot: `psx_speed_limit.gd` (written with every Godot export) caps the frame rate to
+  what the PS1 GPU could draw, from the triangles Godot drew each frame: 180 textured
+  polygons per ms, so 60 fps up to 3000, 30 up to 6000, 20 up to 9000. Flat shading,
+  PAL and a smooth mode are options.
+- Godot: a scene budget editor add-on (`godot/addons/retrocrunch_budget`). Its dock
+  measures the open scene: polygons in view against 3000/6000, texture VRAM in PS1
+  formats against 724 KB (shared textures counted once), the most detailed objects, and
+  which far objects to clip to fit, with a suggested `visibility_range_end`.
 
 ## [0.10.0] - 2026-11-05
 

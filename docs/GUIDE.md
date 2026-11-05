@@ -162,6 +162,16 @@ They share `psx_common.gdshaderinc`: vertex snapping to `snap_lines` (the width 
 
 **Screen pass.** `psx_screen.gd` + `psx_post.gdshader`: add a Control with the script to your main scene and put the 3D level (camera included) under it. It renders at 240 lines (width from the window's aspect), upscales with nearest filtering and applies the PS1 dither and 15-bit colour once per virtual pixel, like the real GPU, switching those off in the psx materials under it. Mouse and keyboard input are forwarded into the low-resolution viewport; Controls under it stay at full resolution on top.
 
+**PS1 speed limit.** `psx_speed_limit.gd`: add a Node with the script inside the 3D scene (inside the screen pass, if you use one). Every frame it reads how many triangles Godot drew and caps the frame rate to what the PS1 GPU could draw: 180 textured, Gouraud-lit polygons per millisecond (360 flat-shaded). A frame that misses the refresh waits for the next one, as on the console: 60 fps up to 3000 polygons, 30 up to 6000, 20 up to 9000. Options: `shading`, `polys_per_ms`, `refresh` (60 NTSC / 50 PAL), `vsync_steps` (off = smooth slowdown) and `show_stats` (corner readout). It's an approximation: Godot counts triangles (a PS1 quad was one polygon) and culls whole objects rather than single back faces; shadow passes are not counted. Tested on Forward+, Mobile and Compatibility.
+
+**Scene budget dock.** Copy `godot/addons/retrocrunch_budget` into your project's `addons/` folder and enable "Retrocrunch PS1 Budget" under Project Settings > Plugins. Press Analyze in the PS1 Budget dock to measure the open scene from the editor view (or the scene's camera):
+
+- polygons in view (a flat quad counts once, like retrocrunch's reports) against 3000 (60 fps) or 6000 (30 fps), and the PS1 frame rate that gives;
+- texture VRAM in PS1 formats (4-bit up to 16 colours, 8-bit up to 256, else 16-bit, plus palettes) against 724 KB. A texture shared by several objects counts once;
+- the three most detailed objects, heavy objects that are small on screen (use an LOD), and, when the view is over budget, the farthest objects to clip until it fits, with a suggested `visibility_range_end`.
+
+Click a row to select the object. Textures imported with VRAM compression (Godot's default for textures embedded in a `.glb`) are flagged, because compression blends the palette and the colour count is then only a guess.
+
 **Import settings.** The `.png.import` files keep textures lossless without VRAM compression (Godot's "Detect 3D" would otherwise compress them and smear the palette) and keep transparent texels exact. HD textures (over 512 px) get mipmaps, sampled with nearest-mipmap filtering.
 
 Rigged models import with a `Skeleton3D`, a skinned mesh and an `AnimationPlayer` holding every clip. Godot moves skinned meshes under the skeleton, so their `.tscn` uses `psx_apply_materials.gd` (a `@tool` script on the root) to assign the PSX materials by material name.

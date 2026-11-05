@@ -81,13 +81,17 @@ Ready-made palettes: `palettes {}` lists 10 built-ins (PICO-8, Sweetie 16, DawnB
 
 | engine | writes |
 |---|---|
-| `godot` | `.glb`, indexed `.png` + `.png.import` (lossless, no VRAM compression), `.tscn` with the PSX material already assigned (rigged scenes use `psx_apply_materials.gd`), `psx_{opaque,cutout,blend}[_double].gdshader` + `psx_common.gdshaderinc` picked per material, and the optional 240-line screen pass `psx_screen.gd` + `psx_post.gdshader` |
+| `godot` | `.glb`, indexed `.png` + `.png.import` (lossless, no VRAM compression), `.tscn` with the PSX material already assigned (rigged scenes use `psx_apply_materials.gd`), `psx_{opaque,cutout,blend}[_double].gdshader` + `psx_common.gdshaderinc` picked per material, the optional 240-line screen pass `psx_screen.gd` + `psx_post.gdshader`, and `psx_speed_limit.gd` (caps the frame rate to PS1 GPU speed from the triangles drawn) |
 | `unity` | `.fbx` via Blender (OBJ if Blender is missing), `.png` |
 | `unreal` | `.glb` at 100x scale |
 | `blender`, `generic` | `.glb` (+ `.obj` for generic) |
 
 Every export also writes `IMPORT_NOTES.txt` with engine-specific import steps, plus a
 320x240 `_preview.png`.
+
+For whole Godot scenes, the editor add-on in `godot/addons/retrocrunch_budget` measures
+polygons in view, texture VRAM and what to clip to fit 3000/6000 polygons (see
+docs/GUIDE.md, "Scene budget dock").
 
 ## Experimental options
 
