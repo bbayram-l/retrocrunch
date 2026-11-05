@@ -470,8 +470,8 @@ impl ModelTab {
                 ui.indent("atlas", |ui| {
                     slider_f32(ui, "bake distance %", &mut s.bake_distance, 0.2..=15.0, 3.0, "How far above/below the low-poly surface to look for source detail (% of model size). Raise it if parts come out with the wrong colour, lower it if detail from neighbouring surfaces bleeds in.");
                     slider_f32(ui, "chart angle", &mut s.chart_angle, 20.0..=85.0, 60.0, "Faces within this angle of a chart's main direction share one UV island: higher = fewer, larger islands.");
-                    if let Some((n, charts)) = self.converted.as_ref().and_then(|c| c.stats.atlas) {
-                        hint(ui, &format!("{n}x{n} atlas, {charts} charts"));
+                    if let Some((n, charts, fill)) = self.converted.as_ref().and_then(|c| c.stats.atlas) {
+                        hint(ui, &format!("{n}x{n} atlas, {charts} charts, {:.0}% filled", fill * 100.0));
                     }
                 });
             }

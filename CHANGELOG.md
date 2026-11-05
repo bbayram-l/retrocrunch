@@ -6,6 +6,15 @@ All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format fo
 
 ## [Unreleased]
 
+### Added
+- Model reports (`inspect_model`, and `source`/`result` in `convert_model`) count
+  `quads` and `polygons` next to `triangles`, for budgets in the PS1 sense where a flat
+  quad is one polygon. Two triangles make a quad when they share an edge (same corner
+  positions and UVs), are within 10 degrees of flat and form a convex shape.
+- The convert report's `atlas` shows `fill_percent`, the share of the atlas the model
+  actually covers. Everything else is padding and gaps that still cost VRAM. The GUI
+  shows it under the atlas settings.
+
 ## [0.10.0] - 2026-11-05
 
 Cleaner, sharper rebaked textures.

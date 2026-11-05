@@ -824,7 +824,18 @@ impl BakeSource {
 /// `cage` is how far above the low-poly surface rays start (world units); every texel
 /// averages `ss x ss` samples.
 pub fn bake_atlas(pieces: &[Piece], n: u32, src: &BakeSource, cage: f32, ss: u32) -> RgbaImage {
-    // 1. Which triangle owns each covered texel.
+    let jobs = texel_owners(pieces, n);
+    bake_texels(pieces, n, src, cage, ss, &jobs)
+}
+
+/// Share of the `n x n` atlas that triangles cover (0..1). The rest is padding and gaps:
+/// texels that still cost VRAM but never reach the screen.
+pub fn atlas_fill(pieces: &[Piece], n: u32) -> f32 {
+    texel_owners(pieces, n).len() as f32 / (n as f32 * n as f32).max(1.0)
+}
+
+/// Which triangle owns each covered texel: (texel index, piece, triangle).
+fn texel_owners(pieces: &[Piece], n: u32) -> Vec<(u32, u32, u32)> {
     let mut owner = vec![false; (n * n) as usize];
     let mut jobs: Vec<(u32, u32, u32)> = Vec::new();
     for (pi, p) in pieces.iter().enumerate() {
@@ -872,7 +883,18 @@ pub fn bake_atlas(pieces: &[Piece], n: u32, src: &BakeSource, cage: f32, ss: u32
             }
         }
     }
-    // 2. Trace ss x ss samples per texel in parallel and average the hits.
+    jobs
+}
+
+/// Trace `ss x ss` samples per owned texel in parallel and average the hits.
+fn bake_texels(
+    pieces: &[Piece],
+    n: u32,
+    src: &BakeSource,
+    cage: f32,
+    ss: u32,
+    jobs: &[(u32, u32, u32)],
+) -> RgbaImage {
     let ss = ss.max(1);
     let low = BakeSource::geometry(pieces);
     let trace = |&(idx, pi, ti): &(u32, u32, u32)| -> Option<Vec4> {
@@ -999,6 +1021,27 @@ mod tests {
             .wrapping_mul(6364136223846793005)
             .wrapping_add(1442695040888963407);
         (*seed >> 40) as f32 / (1u64 << 24) as f32
+    }
+
+    #[test]
+    fn atlas_fill_measures_covered_texels() {
+        let tri = |uvs: [[f32; 2]; 3]| Piece {
+            vertices: uvs
+                .iter()
+                .map(|uv| crate::mesh::Vertex {
+                    uv: Vec2::from(*uv),
+                    ..Default::default()
+                })
+                .collect(),
+            indices: vec![0, 1, 2],
+            ..Default::default()
+        };
+        let half = tri([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
+        let other = tri([[1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
+        let f = atlas_fill(std::slice::from_ref(&half), 64);
+        assert!((0.45..=0.6).contains(&f), "half the atlas: {f}");
+        assert!(atlas_fill(&[half, other], 64) > 0.99, "full atlas");
+        assert_eq!(atlas_fill(&[], 64), 0.0);
     }
 
     #[test]

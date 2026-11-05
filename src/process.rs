@@ -227,8 +227,9 @@ pub struct Stats {
     pub subdivided_added: usize,
     /// Suggested lower bound for rigged models (0 when not rigged).
     pub recommended_min_tris: usize,
-    /// Fresh atlas, if one was made: (size in texels, number of charts).
-    pub atlas: Option<(u32, usize)>,
+    /// Fresh atlas, if one was made: (size in texels, number of charts, share of texels
+    /// the triangles cover, 0..1).
+    pub atlas: Option<(u32, usize, f32)>,
     pub textures: Vec<(String, u32, u32, usize)>,
     /// Detail focus sources used ("head", "painted").
     pub focus: Vec<String>,
@@ -682,7 +683,7 @@ pub fn convert(
                     albedo: Some(img),
                     ..Default::default()
                 }]);
-                stats.atlas = Some((n, u.charts));
+                stats.atlas = Some((n, u.charts, bake::atlas_fill(&pieces, n)));
             }
             None => stats.warnings.push(format!(
                 "The UV atlas did not fit in {n}x{n}; kept the original UVs."
@@ -943,9 +944,10 @@ mod tests {
         let tex = c.model.materials[0].albedo.as_ref().unwrap();
         assert_eq!(tex.dimensions(), (128, 128));
         assert!(
-            c.stats
-                .atlas
-                .is_some_and(|(n, charts)| n == 128 && charts > 1)
+            c.stats.atlas.is_some_and(|(n, charts, fill)| n == 128
+                && charts > 1
+                && fill > 0.1
+                && fill <= 1.0)
         );
         for p in &c.model.pieces {
             assert_eq!(p.material, Some(0));
@@ -1071,7 +1073,7 @@ mod tests {
         assert!(texture::count_colors(tex) > 256, "full colour, no CLUT");
         // Atlas mode: sized from the source texel density, not the 128 px default.
         let atlas = convert(&m, &ps, &hd, None, &|_, _| {});
-        let (n, _) = atlas.stats.atlas.unwrap();
+        let (n, _, _) = atlas.stats.atlas.unwrap();
         assert!((256..=512).contains(&n), "atlas {n}");
         let tex = atlas.model.materials[0].albedo.as_ref().unwrap();
         assert!(texture::count_colors(tex) > 256);

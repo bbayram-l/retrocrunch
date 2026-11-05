@@ -48,7 +48,7 @@ pub fn tools() -> Vec<Value> {
     vec![
         tool(
             "inspect_model",
-            "Load a 3D model (OBJ, GLB/glTF, FBX, or via Blender: .blend/USD/Alembic/STL/PLY) and report triangles, pieces, materials, bounds, rig joints, animation clips, morph targets and the recommended minimum triangle count for rigs. Use before convert_model to pick a budget.",
+            "Load a 3D model (OBJ, GLB/glTF, FBX, or via Blender: .blend/USD/Alembic/STL/PLY) and report triangles, quads and polygons (a flat quad = one PS1 polygon), pieces, materials, bounds, rig joints, animation clips, morph targets and the recommended minimum triangle count for rigs. Use before convert_model to pick a budget.",
             json!({"path": {"type": "string", "description": "Model file path"}}),
             &["path"],
         ),

@@ -205,6 +205,8 @@ pub fn describe(model: &Model) -> Value {
     json!({
         "name": model.name,
         "triangles": model.tri_count(),
+        "quads": model.quad_count(),
+        "polygons": model.polygon_count(),
         "vertices": model.vertex_count(),
         "bounds": {"min": lo.to_array(), "max": hi.to_array(), "size": (hi - lo).to_array()},
         "pieces": model.pieces.iter().map(|p| json!({
@@ -271,7 +273,11 @@ pub fn convert_model(o: &ModelOptions, progress: process::Progress) -> Result<Va
             "vertices_after": c.stats.verts_after,
             "hidden_removed": c.stats.hidden_removed,
             "subdivided_added": c.stats.subdivided_added,
-            "atlas": c.stats.atlas.map(|(n, charts)| json!({"size": n, "charts": charts})),
+            "atlas": c.stats.atlas.map(|(n, charts, fill)| json!({
+                "size": n,
+                "charts": charts,
+                "fill_percent": (f64::from(fill) * 1000.0).round() / 10.0,
+            })),
             "focus": c.stats.focus,
             "vram": c.stats.vram,
             "recommended_min_tris": c.stats.recommended_min_tris,

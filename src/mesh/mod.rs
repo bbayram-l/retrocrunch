@@ -1,6 +1,7 @@
 //! In-memory model representation. File import lives in `load`.
 
 mod load;
+mod quads;
 
 #[cfg(test)]
 use load::percent_decode;

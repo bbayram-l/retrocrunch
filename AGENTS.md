@@ -16,7 +16,8 @@ Check it with the `blender_info` tool or `retrocrunch blender status`.
 
 ## Recommended loop for a model
 
-1. `inspect_model {path}` reports triangles, pieces, materials, bounds, rig (joints,
+1. `inspect_model {path}` reports triangles, quads and polygons (a flat quad counts as
+   one polygon, as in PS1 budgets), pieces, materials, bounds, rig (joints,
    clips) and morph targets. For rigs, `recommended_min_tris` is a lower bound for
    clean joint bending.
 2. `convert_model {input, output_dir, tris, colors, tex_size, engine, ...}` returns the
@@ -25,7 +26,8 @@ Check it with the `blender_info` tool or `retrocrunch blender status`.
 3. `render_preview {input: <the .glb from step 2>, yaw_degrees, clip?, time?}` returns
    a PS1-style render as an image. **Look at it** before reporting success. Pass
    `wireframe: true` to see the triangles (slivers, where the budget went). The convert
-   report's `vram` estimates PS1 VRAM use (experimental). Pose rigged
+   report's `vram` estimates PS1 VRAM use (experimental), and `atlas.fill_percent`
+   says how much of the atlas the model covers (the rest is wasted VRAM). Pose rigged
    or morph models with `clip` and `time` to check deformation.
 4. Adjust and repeat. Typical knobs:
    - Silhouette too blocky: raise `tris`.
