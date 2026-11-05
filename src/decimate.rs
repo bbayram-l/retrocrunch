@@ -185,7 +185,8 @@ fn focus_split(
 }
 
 /// One meshopt reduction of `indices` to about `target_tris`. `frozen_tris` of them are
-/// locked in place and can't change: a stall is judged on the rest.
+/// locked in place and can't change: a stall is judged on the rest. `allow_sloppy` marks
+/// a whole-piece pass (no detail focus).
 fn simplify(
     piece: &Piece,
     indices: &[u32],
@@ -210,7 +211,8 @@ fn simplify(
     ];
     let target_idx = (target_tris * 3).max(3);
     let run = |options: SimplifyOptions| {
-        meshopt::simplify_with_attributes_and_locks_decoder(
+        let mut error = 0.0f32;
+        let out = meshopt::simplify_with_attributes_and_locks_decoder(
             indices,
             &positions,
             &attrs,
@@ -220,21 +222,29 @@ fn simplify(
             target_idx,
             1.0,
             options,
-            None,
-        )
+            Some(&mut error),
+        );
+        (out, error)
     };
     let base = if opt.lock_borders {
         SimplifyOptions::LockBorder
     } else {
         SimplifyOptions::None
     };
-    let mut out = run(base);
-    // Topology (UV seams, borders) can stall the collapse well above target:
-    // relax seam protection, then fall back to sloppy clustering. A large frozen area
-    // would hide a stall in the rest, so it doesn't count.
+    let (mut out, error) = run(base);
+    // Topology (UV seams, borders) can stall the collapse well above target: relax seam
+    // protection. A large frozen area would hide a stall in the rest, so it doesn't count.
+    // Seams can also stall just one part, e.g. a dense, seamed head, while the target is
+    // still met by collapsing everything else: arms and legs vanish. That costs far more
+    // error than letting a few seams move, so the relaxed result wins then too. Only for
+    // whole-piece passes: with a locked area (detail focus) the errors don't compare.
     let frozen = frozen_tris * 3;
-    if out.len().saturating_sub(frozen) > target_idx.saturating_sub(frozen) * 5 / 4 {
-        out = run(base | SimplifyOptions::Permissive);
+    let stalled = out.len().saturating_sub(frozen) > target_idx.saturating_sub(frozen) * 5 / 4;
+    if stalled || allow_sloppy {
+        let (relaxed, relaxed_error) = run(base | SimplifyOptions::Permissive);
+        if stalled || relaxed_error * PERMISSIVE_GAIN < error {
+            out = relaxed;
+        }
     }
     // Sloppy clustering ignores locks and merges vertices across joints and morph
     // regions: never for those, nor in the focused passes.
@@ -247,6 +257,10 @@ fn simplify(
     }
     out
 }
+
+/// Seam-relaxed simplification replaces a normal pass that met its target only when its
+/// error is at least this many times lower (the normal pass keeps UV seams intact).
+const PERMISSIVE_GAIN: f32 = 2.0;
 
 /// Dominant weight below this marks a vertex in a joint's bend zone.
 const BEND_ZONE: f32 = 0.85;
@@ -314,6 +328,35 @@ mod tests {
         assert!(d.tri_count() <= 360, "got {}", d.tri_count());
         assert!(d.tri_count() >= 150, "got {}", d.tri_count());
         assert!(d.vertices.len() < s.vertices.len());
+    }
+
+    /// CesiumMan's head is dense (2651 of 4672 triangles) and so seamed that a
+    /// seam-preserving pass stalls on it at ~586; at a 600 budget that pass met the target
+    /// by deleting every arm and leg. Real-world layout only: synthetic seams didn't stall.
+    #[test]
+    #[ignore = "needs test_assets/CesiumMan.glb (not in git); run with --ignored"]
+    fn seam_stalled_head_does_not_eat_the_limbs() {
+        let model = crate::mesh::Model::load(std::path::Path::new("test_assets/CesiumMan.glb"))
+            .expect("test_assets/CesiumMan.glb");
+        let p = &model.pieces[0];
+        let per_joint = |p: &Piece| {
+            let mut m = std::collections::HashMap::<u16, usize>::new();
+            for t in p.indices.chunks_exact(3) {
+                *m.entry(p.vertices[t[0] as usize].joints[0]).or_default() += 1;
+            }
+            m
+        };
+        let src = per_joint(p);
+        let out = per_joint(&decimate(p, 600, &DecimateOptions::default()));
+        let parts = src.iter().filter(|(_, n)| **n >= 80).count();
+        let kept = src
+            .iter()
+            .filter(|(j, n)| **n >= 80 && out.get(j).copied().unwrap_or(0) >= 3)
+            .count();
+        assert!(
+            kept * 10 >= parts * 9,
+            "only {kept} of {parts} body parts survived"
+        );
     }
 
     #[test]

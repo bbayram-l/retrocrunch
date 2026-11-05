@@ -7,6 +7,10 @@ All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format fo
 ## [Unreleased]
 
 ### Fixed
+- Reduced characters no longer lose their arms and legs when one part (a dense, seamed
+  head) resists reduction: at 600 triangles CesiumMan kept 587 on the head and almost
+  nothing elsewhere. The reduction now lets a few UV seams move when that keeps far more
+  of the shape, so every limb survives (the head drops to 85).
 - Godot exports now include a `.glb.import` that turns off Godot's automatic mesh LODs.
   Godot drew distant models with a fraction of their triangles (a 600-triangle
   character at 150), so they looked smoother than the budget and every polygon count
