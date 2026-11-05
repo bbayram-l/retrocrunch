@@ -29,10 +29,15 @@ pub(crate) fn safe_local_path(dir: &Path, name: &str) -> Option<PathBuf> {
     if name.is_empty() {
         return None;
     }
-    let p = Path::new(name);
-    let unsafe_ref = name.contains("://")
-        || name.starts_with("\\\\")
-        || name.starts_with("//")
+    // Judge the reference the same way on every OS. Models made on Windows use '\' and
+    // drive letters, which macOS and Linux would otherwise read as part of a file name.
+    let norm = name.replace('\\', "/");
+    let b = norm.as_bytes();
+    let drive = b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':';
+    let p = Path::new(&norm);
+    let unsafe_ref = norm.contains("://")
+        || norm.starts_with('/')
+        || drive
         || p.components().any(|c| {
             matches!(
                 c,
@@ -40,7 +45,17 @@ pub(crate) fn safe_local_path(dir: &Path, name: &str) -> Option<PathBuf> {
             )
         });
     let rel = if unsafe_ref {
-        PathBuf::from(p.file_name()?)
+        // Only the last segment, without a drive ("C:tex.png" -> "tex.png").
+        let last = norm.rsplit('/').next().unwrap_or("");
+        let last = if drive && !norm.contains('/') {
+            &last[2..]
+        } else {
+            last
+        };
+        if matches!(last, "" | "." | "..") {
+            return None;
+        }
+        PathBuf::from(last)
     } else {
         p.to_path_buf()
     };
@@ -74,8 +89,9 @@ fn check_gltf_uris(path: &Path) -> Result<()> {
         }
         let decoded = percent_decode(&uri);
         let dir = path.parent().unwrap_or(Path::new("."));
-        let safe = safe_local_path(dir, &decoded).is_some_and(|p| p == dir.join(&decoded))
-            && !decoded.contains(':');
+        let as_given = dir.join(decoded.replace('\\', "/"));
+        let safe =
+            safe_local_path(dir, &decoded).is_some_and(|p| p == as_given) && !decoded.contains(':');
         if !safe {
             bail!(
                 "{} references '{uri}' outside its folder; refusing to follow it",

@@ -749,6 +749,11 @@ pub(crate) mod tests {
             safe_local_path(&dir, "sub/tex.png").unwrap(),
             dir.join("sub/tex.png")
         );
+        // Windows separators mean the same thing on every OS.
+        assert_eq!(
+            safe_local_path(&dir, "sub\\tex.png").unwrap(),
+            dir.join("sub/tex.png")
+        );
         // Absolute, UNC, drive-relative and parent references collapse to the file name.
         for evil in [
             "C:\\Users\\victim\\tex.png",
@@ -756,6 +761,7 @@ pub(crate) mod tests {
             "//attacker/share/tex.png",
             "/etc/tex.png",
             "../../tex.png",
+            "..\\..\\tex.png",
             "C:tex.png",
             "file://host/tex.png",
         ] {
