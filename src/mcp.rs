@@ -105,9 +105,13 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "crunch_texture",
-            "Crunch images to PS1 texture specs (resize, palette via k-means or an imported palette, RGB555, Bayer or PS1 dither) and write indexed PNGs.",
+            "Crunch images to PS1 texture specs (resize, palette via k-means or an imported palette, RGB555, Bayer or PS1 dither) and write indexed PNGs. With `material: true`, inputs are PBR material sets (any map of a set, or folders to scan): the colour map is crunched and its normal/height/AO/metallic/roughness/emission maps are shrunk onto the same pixel grid, AO/roughness/metallic packed into one `_orm.png` (R/G/B), plus a Godot ORMMaterial3D .tres; one output folder per set.",
             merge(
-                json!({"inputs": {"type": "array", "items": {"type": "string"}}, "output_dir": {"type": "string"}, "indexed": {"type": "boolean"}}),
+                json!({"inputs": {"type": "array", "items": {"type": "string"}}, "output_dir": {"type": "string"}, "indexed": {"type": "boolean"},
+                       "material": {"type": "boolean", "description": "Treat inputs as PBR material sets (see above)"},
+                       "bake_ao": {"type": "boolean", "description": "Material mode: darken the colour map with the AO map"},
+                       "bake_normal": {"type": "boolean", "description": "Material mode: paint the normal map's relief into the colour map (PS1 has no normal maps)"},
+                       "godot": {"type": "boolean", "description": "Material mode: write the .tres and .png.import files (default true)"}}),
                 texture_props(),
             ),
             &["inputs"],

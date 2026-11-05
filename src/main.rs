@@ -349,6 +349,17 @@ struct TextureArgs {
     out: PathBuf,
     #[command(flatten)]
     tex: TexOpts,
+    /// PBR material sets: crunch each input with its sibling normal/height/AO/metallic/
+    /// roughness maps (folders are scanned for sets), pack an ORM texture and write a
+    /// Godot material. One output folder per set.
+    #[arg(long)]
+    material: bool,
+    /// Material mode: darken the colour map with the AO map.
+    #[arg(long)]
+    bake_ao: bool,
+    /// Material mode: paint the normal map's relief into the colour map.
+    #[arg(long)]
+    bake_normal: bool,
 }
 
 #[derive(Args)]
@@ -698,6 +709,12 @@ fn main() -> Result<()> {
             output_dir: a.out,
             texture: (&a.tex).into(),
             indexed: true,
+            material: a.material,
+            material_options: retrocrunch::material::MaterialSettings {
+                bake_ao: a.bake_ao,
+                bake_normal: a.bake_normal,
+                ..Default::default()
+            },
         })?,
         Some(Cmd::Normals(a)) => ops::sprite_maps(&SpriteJob {
             inputs: a.inputs,

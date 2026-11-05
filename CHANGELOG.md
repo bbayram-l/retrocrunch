@@ -6,6 +6,16 @@ All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format fo
 
 ## [Unreleased]
 
+### Added
+- PBR material sets in the Texture tab. Opening any map of a set (`<name>_basecolor`,
+  `_normal`/`_normalogl`, `_height`, `_ambientocclusion`, `_metallic`, `_roughness`,
+  `_emissive`...) loads the whole set. Every map is pixelised onto the colour texture's
+  grid, AO/roughness/metallic are packed into one `_orm.png` (R/G/B), and "Save
+  material..." also writes a Godot `ORMMaterial3D` with nearest filtering. AO and normal
+  relief can be baked into the colour instead. "Batch materials..." does every set in a
+  folder and its subfolders. DirectX normal maps are converted to OpenGL. Also as
+  `crunch_texture {material: true}` and `retrocrunch texture --material`.
+
 ### Fixed
 - The Texture tab lagged with large (4K) images: it counted the original's colours on
   every frame.

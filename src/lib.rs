@@ -16,6 +16,7 @@ pub mod detail;
 pub mod export;
 pub mod fbx;
 pub mod lospec;
+pub mod material;
 pub mod mcp;
 pub mod mesh;
 pub mod ops;

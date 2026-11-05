@@ -134,6 +134,11 @@ The saved project opens in the GUI's Blocks tab for hand editing.
   Godot `CanvasTexture`.
 - `scale_pixel_art {inputs, algorithm: "scale3x"}`: smooth upscales with no new colours.
 - `crunch_texture {inputs, tex_size, colors}`: PS1 texture specs.
+- `crunch_texture {inputs: [<any map of a set, or a folder>], material: true}`: PBR
+  material sets (`_basecolor` + `_normal`/`_height`/`_ambientocclusion`/`_metallic`/
+  `_roughness`). All maps land on the colour texture's pixel grid, AO/roughness/metallic
+  pack into `_orm.png` (R/G/B), and a Godot ORMMaterial3D `.tres` is written; one folder
+  per set. `bake_ao` / `bake_normal` paint AO or relief into the colour (PS1 style).
 
 ## Conventions
 

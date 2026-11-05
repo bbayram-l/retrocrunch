@@ -432,6 +432,11 @@ pub struct TextureJob {
     #[serde(flatten)]
     pub texture: TextureOptions,
     pub indexed: bool,
+    /// Treat inputs as PBR material sets: each file (or every set under a folder) is
+    /// crunched with its sibling normal/height/AO/metallic/roughness maps.
+    pub material: bool,
+    #[serde(flatten)]
+    pub material_options: crate::material::MaterialSettings,
 }
 
 impl Default for TextureJob {
@@ -441,14 +446,66 @@ impl Default for TextureJob {
             output_dir: PathBuf::from("psx_out"),
             texture: TextureOptions::default(),
             indexed: true,
+            material: false,
+            material_options: Default::default(),
         }
     }
+}
+
+/// Material mode of [`crunch_textures`]: one output folder per material set.
+fn crunch_materials(
+    o: &TextureJob,
+    s: &texture::CrunchSettings,
+    pal: Option<&[Rgb]>,
+) -> Result<Value> {
+    use crate::material;
+    let mut sets: Vec<material::MaterialFiles> = Vec::new();
+    for input in &o.inputs {
+        let found = if input.is_dir() {
+            material::find_all(input)?
+        } else {
+            vec![material::find_material(input)?.with_context(|| {
+                format!(
+                    "{}: no material set (needs a colour map such as <name>_basecolor plus at least one other map next to it)",
+                    input.display()
+                )
+            })?]
+        };
+        for f in found {
+            if !sets.iter().any(|s| {
+                s.maps.get(&material::MapKind::Color) == f.maps.get(&material::MapKind::Color)
+            }) {
+                sets.push(f);
+            }
+        }
+    }
+    anyhow::ensure!(!sets.is_empty(), "no material sets found in the inputs");
+    let mut results = Vec::new();
+    for f in &sets {
+        let imgs = material::MaterialImages::load(f)?;
+        let cm = material::crunch_material(&imgs, s, pal, &o.material_options);
+        let dir = o.output_dir.join(&f.name);
+        let files = material::export(&dir, &f.name, &cm, o.indexed, o.material_options.godot)?;
+        results.push(json!({
+            "name": f.name,
+            "maps": f.maps.iter().map(|(k, p)| (k.label().to_string(), json!(p.display().to_string()))).collect::<serde_json::Map<_, _>>(),
+            "directx_normal": f.directx_normal,
+            "outputs": files.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+            "width": cm.color.image.width(),
+            "height": cm.color.image.height(),
+            "colors": texture::count_colors(&cm.color.image),
+        }));
+    }
+    Ok(json!({"materials": results}))
 }
 
 pub fn crunch_textures(o: &TextureJob) -> Result<Value> {
     std::fs::create_dir_all(&o.output_dir)?;
     let pal = o.texture.load_palette()?;
     let s = o.texture.crunch()?;
+    if o.material {
+        return crunch_materials(o, &s, pal.as_deref());
+    }
     let mut results = Vec::new();
     for input in &o.inputs {
         let img = image::open(input)

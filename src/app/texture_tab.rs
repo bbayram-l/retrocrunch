@@ -6,6 +6,9 @@ use super::widgets::{
 };
 use egui::{RichText, Ui};
 use image::RgbaImage;
+use retrocrunch::material::{
+    self, CrunchedMaterial, MaterialFiles, MaterialImages, MaterialSettings, ShrunkMaps,
+};
 use retrocrunch::palette::Rgb;
 use retrocrunch::texture::{
     self, AlphaMode, BakeMaps, CrunchSettings, DitherMode, PaletteMode, ResizeFilter,
@@ -18,6 +21,15 @@ use std::path::{Path, PathBuf};
 pub struct TextureTab {
     pub settings: CrunchSettings,
     pub indexed_png: bool,
+    pub material_settings: MaterialSettings,
+    /// The opened image belongs to a PBR material set (normal, height, AO...).
+    #[serde(skip)]
+    material: Option<LoadedMaterial>,
+    /// Which map the PSX view shows.
+    #[serde(skip)]
+    out_view: OutView,
+    #[serde(skip)]
+    shown_view: Option<OutView>,
     #[serde(skip)]
     path: Option<PathBuf>,
     #[serde(skip)]
@@ -41,6 +53,56 @@ pub struct TextureTab {
     /// Palette cycling preview (experimental).
     #[serde(skip)]
     cycle: Cycle,
+}
+
+struct LoadedMaterial {
+    files: MaterialFiles,
+    images: MaterialImages,
+    /// Kept while only colour settings change: shrinking 4K maps is slow.
+    shrunk: Option<ShrunkMaps>,
+    result: Option<CrunchedMaterial>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum OutView {
+    #[default]
+    Color,
+    Normal,
+    Height,
+    Orm,
+    Emission,
+}
+
+impl OutView {
+    const ALL: [OutView; 5] = [
+        Self::Color,
+        Self::Normal,
+        Self::Height,
+        Self::Orm,
+        Self::Emission,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Color => "Colour",
+            Self::Normal => "Normal",
+            Self::Height => "Height",
+            Self::Orm => "ORM (AO/rough/metal)",
+            Self::Emission => "Emission",
+        }
+    }
+
+    /// The map to show, `None` when the material has no such map.
+    fn image(self, cm: &CrunchedMaterial) -> Option<RgbaImage> {
+        let gray = |g: &image::GrayImage| image::DynamicImage::ImageLuma8(g.clone()).to_rgba8();
+        match self {
+            Self::Color => Some(cm.color.image.clone()),
+            Self::Normal => cm.normal.clone(),
+            Self::Height => cm.height.as_ref().map(gray),
+            Self::Orm => cm.orm.clone(),
+            Self::Emission => cm.emission.clone(),
+        }
+    }
 }
 
 /// Palette cycling state: entries `start..=end` of the result palette rotate.
@@ -82,9 +144,11 @@ pub fn crunch_with(
 impl TextureTab {
     pub fn clear_asset(&mut self) {
         let (settings, indexed) = (std::mem::take(&mut self.settings), self.indexed_png);
+        let material_settings = std::mem::take(&mut self.material_settings);
         *self = Self {
             settings,
             indexed_png: indexed,
+            material_settings,
             ..Default::default()
         };
     }
@@ -92,6 +156,7 @@ impl TextureTab {
     pub fn revert_to_defaults(&mut self) {
         self.settings = CrunchSettings::default();
         self.indexed_png = true;
+        self.material_settings = MaterialSettings::default();
         self.last_key.clear();
     }
 
@@ -107,10 +172,33 @@ impl TextureTab {
     pub fn load(&mut self, p: PathBuf, sh: &mut Shared) {
         match image::open(&p) {
             Ok(i) => {
-                let img = i.to_rgba8();
+                let mut img = i.to_rgba8();
+                let mut path = p.clone();
+                self.material = None;
+                // Any map of a material set opens the whole set, shown with its colour map.
+                match material::find_material(&p) {
+                    Ok(Some(files)) => match MaterialImages::load(&files) {
+                        Ok(images) => {
+                            img = images.color.clone();
+                            path = files.maps[&material::MapKind::Color].clone();
+                            sh.status = format!("Material set {}: {}", files.name, files.summary());
+                            self.material = Some(LoadedMaterial {
+                                files,
+                                images,
+                                shrunk: None,
+                                result: None,
+                            });
+                        }
+                        Err(e) => sh.error = Some(format!("Material maps: {e:#}")),
+                    },
+                    Ok(None) => {}
+                    Err(e) => sh.error = Some(format!("Material maps: {e:#}")),
+                }
+                self.out_view = OutView::Color;
+                self.shown_view = None;
                 self.color_counts = (texture::count_colors(&img), 0);
                 self.source = Some(img);
-                self.path = Some(p);
+                self.path = Some(path);
                 self.last_key.clear();
                 self.view_src = ImageView::default();
                 self.view_out = ImageView::default();
@@ -122,8 +210,12 @@ impl TextureTab {
 
     fn update(&mut self, ctx: &egui::Context, sh: &Shared) {
         let Some(src) = &self.source else { return };
+        let material_key = match &self.material {
+            Some(_) => serde_json::to_string(&self.material_settings).unwrap_or_default(),
+            None => String::new(),
+        };
         let key = format!(
-            "{}|{}",
+            "{}|{}|{material_key}",
             serde_json::to_string(&self.settings).unwrap_or_default(),
             sh.palette.as_ref().map_or("", |p| &p.name)
         );
@@ -132,17 +224,45 @@ impl TextureTab {
         }
         if key != self.last_key {
             self.last_key = key;
-            let r = crunch_with(
-                src,
-                &self.settings,
-                sh.palette.as_ref().map(|p| p.colors.as_slice()),
-            );
-            self.tex_out.set(ctx, "tex_out", &r.0);
+            let s = &self.settings;
+            let pal = sh.palette.as_ref().map(|p| p.colors.as_slice());
+            let r = match &mut self.material {
+                Some(m) => {
+                    let size =
+                        texture::target_dims(src.width(), src.height(), s.max_size, s.power_of_two);
+                    if m.shrunk
+                        .as_ref()
+                        .is_none_or(|sm| sm.size != size || sm.filter != s.filter)
+                    {
+                        m.shrunk = Some(material::shrink_maps(&m.images, s));
+                    }
+                    let sm = m.shrunk.as_ref().expect("shrunk above");
+                    let ms = &self.material_settings;
+                    let cm = material::crunch_with_maps(&m.images.color, sm, s, pal, ms);
+                    let r = (cm.color.image.clone(), cm.color.palette.clone());
+                    m.result = Some(cm);
+                    r
+                }
+                None => crunch_with(src, s, pal),
+            };
             self.color_counts.1 = texture::count_colors(&r.0);
             self.result = Some(r);
+            self.shown_view = None;
             // The palette changed: re-index for cycling.
             self.cycle.indexed = None;
             self.cycle.step = None;
+        }
+        if self.shown_view != Some(self.out_view) {
+            let cm = self.material.as_ref().and_then(|m| m.result.as_ref());
+            match (cm.and_then(|cm| self.out_view.image(cm)), &self.result) {
+                (Some(img), _) => self.tex_out.set(ctx, "tex_out", &img),
+                (None, Some((img, _))) => {
+                    self.out_view = OutView::Color;
+                    self.tex_out.set(ctx, "tex_out", img);
+                }
+                (None, None) => {}
+            }
+            self.shown_view = Some(self.out_view);
         }
     }
 
@@ -157,6 +277,17 @@ impl TextureTab {
                 .clicked()
             {
                 self.batch(sh);
+            }
+            if ui
+                .button("Batch materials...")
+                .on_hover_text(
+                    "Every PBR material set in a folder and its subfolders (<name>_basecolor \
+                     with _normal, _height, _ambientocclusion, _metallic, _roughness...): all \
+                     maps pixelised onto one grid, ORM packed, one output folder per material",
+                )
+                .clicked()
+            {
+                self.batch_materials(sh);
             }
         });
         ui.horizontal(|ui| {
@@ -183,6 +314,7 @@ impl TextureTab {
         ui.separator();
         let s = &mut self.settings;
         let mut do_save = false;
+        let mut do_save_material = false;
         let mut do_cycle_export = false;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -251,6 +383,43 @@ impl TextureTab {
                         ui.selectable_value(&mut s.alpha, AlphaMode::Keep, "RGBA");
                     });
                 });
+                if let Some(m) = &self.material {
+                    let ms = &mut self.material_settings;
+                    section(ui, "Material maps", true, |ui| {
+                        hint(ui, &format!("{}: {}", m.files.name, m.files.summary()));
+                        if m.files.directx_normal {
+                            hint(ui, "DirectX normal map, converted to OpenGL / Godot.");
+                        }
+                        hint(
+                            ui,
+                            "Every map is pixelised onto the colour texture's grid; AO, \
+                             roughness and metallic are packed into one ORM texture (R, G, B).",
+                        );
+                        ui.checkbox(&mut ms.bake_ao, "Bake AO into the colour")
+                            .on_hover_text("For engines that don't use the ORM texture");
+                        if ms.bake_ao {
+                            slider_f32(ui, "AO strength", &mut ms.ao_strength, 0.0..=1.0, 1.0, "");
+                        }
+                        ui.checkbox(&mut ms.bake_normal, "Bake normal relief into the colour")
+                            .on_hover_text(
+                                "Fixed top-left light painted into the texture, the PS1 way \
+                                 (the console has no normal maps)",
+                            );
+                        if ms.bake_normal {
+                            slider_f32(ui, "relief", &mut ms.normal_strength, 0.0..=3.0, 1.0, "");
+                        }
+                        ui.checkbox(&mut ms.godot, "Godot material (.tres) + import files");
+                        if ui
+                            .add_enabled(m.result.is_some(), egui::Button::new("Save material..."))
+                            .on_hover_text(
+                                "Write <name>_albedo/_normal/_height/_orm.png into a folder",
+                            )
+                            .clicked()
+                        {
+                            do_save_material = true;
+                        }
+                    });
+                }
                 if let Some((_, pal)) = &self.result
                     && !pal.is_empty()
                 {
@@ -303,6 +472,9 @@ impl TextureTab {
             });
         if do_save {
             self.save(sh);
+        }
+        if do_save_material {
+            self.save_material(sh);
         }
         if do_cycle_export {
             self.export_cycle(sh);
@@ -364,6 +536,73 @@ impl TextureTab {
         }
     }
 
+    fn save_material(&mut self, sh: &mut Shared) {
+        let Some(m) = &self.material else { return };
+        let Some(cm) = &m.result else { return };
+        let mut d = rfd::FileDialog::new().set_title("Folder for the material");
+        if let Some(parent) = self.path.as_ref().and_then(|p| p.parent()) {
+            d = d.set_directory(parent);
+        }
+        let Some(dir) = d.pick_folder() else { return };
+        let godot = self.material_settings.godot;
+        match material::export(&dir, &m.files.name, cm, self.indexed_png, godot) {
+            Ok(files) => sh.status = format!("Wrote {} files to {}", files.len(), dir.display()),
+            Err(e) => sh.error = Some(format!("{e:#}")),
+        }
+    }
+
+    fn batch_materials(&mut self, sh: &mut Shared) {
+        let Some(src) = rfd::FileDialog::new()
+            .set_title("Folder with material sets")
+            .pick_folder()
+        else {
+            return;
+        };
+        let sets = match material::find_all(&src) {
+            Ok(s) if s.is_empty() => {
+                sh.error = Some(format!(
+                    "No material sets in {}: a set needs a colour map (<name>_basecolor, \
+                     _albedo, _diffuse...) and at least one other map with the same name \
+                     (_normal, _height, _ambientocclusion, _metallic, _roughness).",
+                    src.display()
+                ));
+                return;
+            }
+            Ok(s) => s,
+            Err(e) => {
+                sh.error = Some(format!("{e:#}"));
+                return;
+            }
+        };
+        let Some(out) = rfd::FileDialog::new()
+            .set_title(format!("Output folder for {} materials", sets.len()))
+            .pick_folder()
+        else {
+            return;
+        };
+        let pal = sh.palette.as_ref().map(|p| p.colors.clone());
+        let ms = &self.material_settings;
+        let mut errors = Vec::new();
+        for f in &sets {
+            let res = MaterialImages::load(f).and_then(|imgs| {
+                let cm = material::crunch_material(&imgs, &self.settings, pal.as_deref(), ms);
+                material::export(&out.join(&f.name), &f.name, &cm, self.indexed_png, ms.godot)
+            });
+            if let Err(e) = res {
+                errors.push(format!("{}: {e:#}", f.name));
+            }
+        }
+        sh.status = format!(
+            "Batch: {} of {} materials written to {}",
+            sets.len() - errors.len(),
+            sets.len(),
+            out.display()
+        );
+        if !errors.is_empty() {
+            sh.error = Some(errors.join("\n"));
+        }
+    }
+
     fn batch(&mut self, sh: &mut Shared) {
         let Some(files) = rfd::FileDialog::new()
             .add_filter("Images", &IMAGE_EXTS)
@@ -412,11 +651,21 @@ impl TextureTab {
         let out_size = out.map_or(src_size, |(o, _)| {
             egui::vec2(o.width() as f32, o.height() as f32)
         });
+        if let Some(cm) = self.material.as_ref().and_then(|m| m.result.as_ref()) {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Show").color(DIM));
+                for v in OutView::ALL {
+                    if v == OutView::Color || v.image(cm).is_some() {
+                        ui.selectable_value(&mut self.out_view, v, v.label());
+                    }
+                }
+            });
+        }
         let avail = ui.available_size();
         let half = egui::vec2((avail.x - 12.0) / 2.0, avail.y - 70.0);
         // Palette cycling: show the current step of the animation instead of the result.
         let mut shown = ho.clone();
-        if self.cycle.on && self.result.is_some() {
+        if self.cycle.on && self.result.is_some() && self.out_view == OutView::Color {
             let ctx = ui.ctx().clone();
             let step = (ctx.input(|i| i.time) * self.cycle.speed as f64).floor() as i64;
             if self.cycle.step != Some(step) {
