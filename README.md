@@ -99,8 +99,10 @@ reproduce what the hardware did:
 
 ## Quick start
 
-**Download a ready-built Windows release from [itch.io](https://laegh.itch.io/retrocrunch)**:
-free, or pay what you want to support development. Or build from source with the Rust
+**Download a ready-built release for Windows or macOS (Apple Silicon) from
+[itch.io](https://laegh.itch.io/retrocrunch)**: free, or pay what you want to support
+development. The same builds are on [GitHub Releases](https://github.com/bbayram-l/retrocrunch/releases).
+Or build from source with the Rust
 MSVC toolchain and the Visual Studio C++ build tools:
 
 ```powershell
@@ -166,7 +168,7 @@ Every image above was rendered and converted by Retrocrunch itself, from these m
   [rigging and animation](https://sketchfab.com/3d-models/low-poly-fox-by-pixelmannen-animated-371dea88d7e04a76af5763f2a36866bc)
   by tomkranis, glTF conversion by AsoboStudio and scurest, under
   [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Converted, posed and rendered
-  for these images.
+  for these images. The macOS app icon is the same Fox, converted by Retrocrunch.
 
 The built-in palettes are credited to their authors in the app's palette library.
 

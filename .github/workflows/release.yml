@@ -1,4 +1,4 @@
-# Builds the Windows release zip and publishes it as a GitHub release.
+# Builds the Windows and macOS release zips and publishes them as a GitHub release.
 # Runs when a version tag (v1.2.3) is pushed, or by hand for an existing tag.
 name: Release
 
@@ -11,24 +11,26 @@ on:
         description: "Existing tag to release, e.g. v0.11.0"
         required: true
 
+# Builds only read; the publish job alone can write the release.
 permissions:
-  contents: write
+  contents: read
 
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+# Each build checks out the source from the tag and the packaging files from this
+# workflow's commit, so older tags can be released by hand too. Actions are pinned to
+# commits and there is no build cache, so nothing from earlier runs ends up in a release.
 jobs:
   windows:
     runs-on: windows-latest
     env:
-      TAG: ${{ github.event.inputs.tag || github.ref_name }}
       # Static CRT: the exe runs without the Visual C++ redistributable.
       RUSTFLAGS: -C target-feature=+crt-static
     defaults:
       run:
         shell: pwsh
     steps:
-      # Source from the tag; packaging files from this workflow's commit, so older
-      # tags can be released by hand too.
-      # Actions are pinned to commits; no build cache, so nothing from earlier runs
-      # can end up in a release.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ env.TAG }}
@@ -38,7 +40,6 @@ jobs:
         with:
           path: ci
           persist-credentials: false
-
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
@@ -78,21 +79,118 @@ jobs:
           & "smoke/retrocrunch-$env:VERSION/retrocrunch.exe" --version
           if ($LASTEXITCODE -ne 0) { throw "exe failed to start" }
 
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows
+          path: ${{ env.ZIP }}
+          if-no-files-found: error
+
+  macos:
+    # Apple Silicon runner: the app is built for arm64 Macs.
+    runs-on: macos-14
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.TAG }}
+          path: src
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          path: ci
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+
+      - name: Check the tag matches Cargo.toml
+        working-directory: src
+        run: |
+          version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          [ "v$version" = "$TAG" ] || { echo "Tag $TAG doesn't match Cargo.toml version $version"; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Test
+        working-directory: src
+        run: cargo test --release --locked
+
+      - name: Build
+        working-directory: src
+        run: cargo build --release --locked
+
+      - name: Package Retrocrunch.app
+        run: |
+          set -euo pipefail
+          name="retrocrunch-$VERSION"
+          dir="dist/$name"
+          app="$dir/Retrocrunch.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp src/target/release/retrocrunch "$app/Contents/MacOS/"
+          cp ci/packaging/macos/AppIcon.icns "$app/Contents/Resources/"
+          sed "s/@VERSION@/$VERSION/g" ci/packaging/macos/Info.plist > "$app/Contents/Info.plist"
+          plutil -lint "$app/Contents/Info.plist"
+          # Ad-hoc signature: no developer certificate, but a consistent signature, so
+          # macOS asks before opening it instead of calling it damaged.
+          codesign --force --deep --sign - "$app"
+          sed "s/@VERSION@/$VERSION/g" ci/packaging/macos/README.txt > "$dir/README.txt"
+          cp src/docs/GUIDE.md src/AGENTS.md src/CHANGELOG.md src/LICENSE.md src/THIRD_PARTY_LICENSES.html "$dir/"
+          cp -R src/blender src/godot "$dir/"
+          # ditto keeps the executable bit and the signature intact.
+          (cd dist && ditto -c -k --keepParent "$name" "$name-macos-arm64.zip")
+          echo "ZIP=dist/$name-macos-arm64.zip" >> "$GITHUB_ENV"
+
+      - name: Smoke test the packaged app
+        run: |
+          set -euo pipefail
+          ditto -x -k "$ZIP" smoke
+          app="smoke/retrocrunch-$VERSION/Retrocrunch.app"
+          codesign --verify --deep --strict "$app"
+          "$app/Contents/MacOS/retrocrunch" --version
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: macos
+          path: ${{ env.ZIP }}
+          if-no-files-found: error
+
+  publish:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          path: dist
+          merge-multiple: true
+
       - name: Release notes from CHANGELOG.md
         run: |
-          $log = Get-Content src/CHANGELOG.md -Raw
-          $section = [regex]::Match($log, "(?ms)^## \[$([regex]::Escape($env:VERSION))\][^\n]*\n(.*?)(?=^## \[|\z)").Groups[1].Value.Trim()
-          if (-not $section) { throw "No CHANGELOG.md section for $env:VERSION" }
+          $version = $env:TAG.Substring(1)
+          $log = Get-Content CHANGELOG.md -Raw
+          $section = [regex]::Match($log, "(?ms)^## \[$([regex]::Escape($version))\][^\n]*\n(.*?)(?=^## \[|\z)").Groups[1].Value.Trim()
+          if (-not $section) { throw "No CHANGELOG.md section for $version" }
           $section + "`n`nAlso on itch.io: https://laegh.itch.io/retrocrunch" | Set-Content notes.md
+          "VERSION=$version" >> $env:GITHUB_ENV
 
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $zips = Get-ChildItem dist/*.zip | ForEach-Object FullName
+          if ($zips.Count -ne 2) { throw "Expected 2 zips, found: $zips" }
           gh release view $env:TAG --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $env:TAG $env:ZIP --clobber --repo $env:GITHUB_REPOSITORY
+            gh release upload $env:TAG @zips --clobber --repo $env:GITHUB_REPOSITORY
           } else {
-            gh release create $env:TAG $env:ZIP --repo $env:GITHUB_REPOSITORY `
+            gh release create $env:TAG @zips --repo $env:GITHUB_REPOSITORY `
               --title "Retrocrunch $env:VERSION" --notes-file notes.md --verify-tag
           }

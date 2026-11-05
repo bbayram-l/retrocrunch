@@ -6,6 +6,11 @@ All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format fo
 
 ## [Unreleased]
 
+### Added
+- macOS builds for Apple Silicon: `Retrocrunch.app` with a Fox icon, ad-hoc signed, in
+  a zip with the guide and the Blender and Godot folders. Every tagged version is now
+  published on GitHub Releases for Windows and macOS.
+
 ## [0.11.0] - 2026-11-05
 
 PS1 budgets for whole scenes: polygons counted the PS1 way, and two Godot tools that
