@@ -48,3 +48,20 @@ func _select(node: Node) -> void:
 	sel.clear()
 	sel.add_node(node)
 	EditorInterface.edit_node(node)
+	# Editing a node brings the Inspector to the front; keep the budget list visible.
+	_show_dock.call_deferred()
+
+
+func _show_dock() -> void:
+	if dock == null:
+		return
+	# Godot 4.6+ wraps plugin docks in an EditorDock; older versions use a TabContainer.
+	var node: Node = dock
+	while node:
+		if node.is_class("EditorDock"):
+			node.call("make_visible")
+			return
+		node = node.get_parent()
+	var tabs := dock.get_parent()
+	if tabs is TabContainer:
+		tabs.current_tab = dock.get_index()

@@ -40,17 +40,27 @@ func _init() -> void:
 	summary.text = "Press Analyze to measure the open scene."
 	add_child(summary)
 	tree = Tree.new()
-	tree.columns = 6
+	tree.columns = 5
 	tree.column_titles_visible = true
 	tree.hide_root = true
 	tree.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	for c in 6:
-		tree.set_column_title(c, ["Object", "Polys", "Tris", "KB", "Dist", "Note"][c])
-		tree.set_column_expand(c, c == 0 or c == 5)
-		if c in [1, 2, 3, 4]:
-			tree.set_column_custom_minimum_width(c, 64)
+	for c in 5:
+		tree.set_column_title(c, ["Object", "Polys", "KB", "Dist", "Note"][c])
+		# Names and notes share the spare width; numbers stay just wide enough.
+		tree.set_column_expand(c, c == 0 or c == 4)
+		tree.set_column_clip_content(c, c == 0 or c == 4)
+		if c in [1, 2, 3]:
+			var width: int = {1: 64, 2: 48, 3: 56}[c]
+			tree.set_column_custom_minimum_width(c, roundi(width * _ui_scale()))
 	tree.item_selected.connect(_on_selected)
 	add_child(tree)
+
+
+## The editor's display scale (1 outside the editor).
+func _ui_scale() -> float:
+	if Engine.is_editor_hint() and Engine.has_singleton("EditorInterface"):
+		return Engine.get_singleton("EditorInterface").get_editor_scale()
+	return 1.0
 
 
 func target() -> int:
@@ -83,12 +93,14 @@ func show_result(r: Dictionary) -> void:
 		var dist := "-" if o.distance < 0.0 else "%.1f" % o.distance
 		if not o.in_view:
 			dist += " (off)"
-		_fill(item, [o.name, str(o.polys), str(o.tris), "%.1f" % kb, dist, "; ".join(o.notes)])
+		_fill(item, [o.name, str(o.polys), "%.1f" % kb, dist, "; ".join(o.notes)])
+		item.set_tooltip_text(1, "%d polygons (%d triangles)" % [o.polys, o.tris])
 		item.set_metadata(0, o.node)
-		item.set_tooltip_text(5, _explain(o.notes))
+		item.set_tooltip_text(0, o.name)
+		item.set_tooltip_text(4, _explain(o.notes))
 		var clipped: bool = o.notes.any(func(n): return n.begins_with("clip"))
 		if clipped or not o.notes.is_empty() and o.in_view:
-			for c in 6:
+			for c in 5:
 				item.set_custom_color(c, RED if clipped else ORANGE)
 	var textures := tree.create_item(root)
 	textures.set_text(0, "Textures (%d)" % r.textures.size())
@@ -99,9 +111,9 @@ func show_result(r: Dictionary) -> void:
 			note += "; GPU-compressed import: re-import lossless for exact colours"
 		var label := t.resource_path.get_file() if t.resource_path else str(t)
 		var item := tree.create_item(textures)
-		_fill(item, [label, "", "", "%.1f" % info.kb, "", note])
+		_fill(item, [label, "", "%.1f" % info.kb, "", note])
 		if info.compressed:
-			item.set_custom_color(5, ORANGE)
+			item.set_custom_color(4, ORANGE)
 
 
 ## Long form of the short notes, for the tooltip.
@@ -121,7 +133,7 @@ func _explain(notes: Array) -> String:
 func _fill(item: TreeItem, cells: Array) -> void:
 	for c in cells.size():
 		item.set_text(c, cells[c])
-		if c in [1, 2, 3, 4]:
+		if c in [1, 2, 3]:
 			item.set_text_alignment(c, HORIZONTAL_ALIGNMENT_RIGHT)
 
 
