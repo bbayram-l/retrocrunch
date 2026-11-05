@@ -34,6 +34,10 @@ pub struct TextureTab {
     view_out: ImageView,
     #[serde(skip)]
     last_key: String,
+    /// Colour counts of the source and the result, cached: counting a 4K image
+    /// every frame made the tab lag.
+    #[serde(skip)]
+    color_counts: (usize, usize),
     /// Palette cycling preview (experimental).
     #[serde(skip)]
     cycle: Cycle,
@@ -103,7 +107,9 @@ impl TextureTab {
     pub fn load(&mut self, p: PathBuf, sh: &mut Shared) {
         match image::open(&p) {
             Ok(i) => {
-                self.source = Some(i.to_rgba8());
+                let img = i.to_rgba8();
+                self.color_counts = (texture::count_colors(&img), 0);
+                self.source = Some(img);
                 self.path = Some(p);
                 self.last_key.clear();
                 self.view_src = ImageView::default();
@@ -132,6 +138,7 @@ impl TextureTab {
                 sh.palette.as_ref().map(|p| p.colors.as_slice()),
             );
             self.tex_out.set(ctx, "tex_out", &r.0);
+            self.color_counts.1 = texture::count_colors(&r.0);
             self.result = Some(r);
             // The palette changed: re-index for cycling.
             self.cycle.indexed = None;
@@ -436,7 +443,7 @@ impl TextureTab {
                         "Original  {}x{}  {} colours",
                         src.width(),
                         src.height(),
-                        texture::count_colors(src)
+                        self.color_counts.0
                     ))
                     .color(DIM),
                 );
@@ -449,7 +456,7 @@ impl TextureTab {
                             "PSX  {}x{}  {} colours",
                             o.width(),
                             o.height(),
-                            texture::count_colors(o)
+                            self.color_counts.1
                         ))
                         .color(DIM),
                     );

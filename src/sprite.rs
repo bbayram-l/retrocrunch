@@ -303,57 +303,103 @@ pub fn lit_preview(
     l: &LightSettings,
     flip_y: bool,
 ) -> RgbaImage {
+    lit_preview_step(diffuse, maps, l, flip_y, 1)
+}
+
+/// [`lit_preview`] evaluated on every `step`-th texel (an image `step` times smaller),
+/// so large sprites can be relit while the light follows the mouse. Lighting is computed
+/// in full-resolution texel coordinates, so it matches the full preview at each sample.
+pub fn lit_preview_step(
+    diffuse: &RgbaImage,
+    maps: &SpriteMaps,
+    l: &LightSettings,
+    flip_y: bool,
+    step: u32,
+) -> RgbaImage {
+    let step = step.max(1);
+    let (w, h) = diffuse.dimensions();
+    let (ow, oh) = (w.div_ceil(step), h.div_ceil(step));
+    let sample = |o: u32, max: u32| (o * step + step / 2).min(max - 1);
+    let mut out = RgbaImage::new(ow, oh);
+    let row_bytes = ow as usize * 4;
+    if row_bytes == 0 {
+        return out;
+    }
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let rows_per_chunk = (oh as usize).div_ceil(threads).max(1);
+    std::thread::scope(|scope| {
+        for (ci, chunk) in out.chunks_mut(rows_per_chunk * row_bytes).enumerate() {
+            scope.spawn(move || {
+                for (ri, row) in chunk.chunks_mut(row_bytes).enumerate() {
+                    let sy = sample((ci * rows_per_chunk + ri) as u32, h);
+                    for (ox, px) in row.chunks_mut(4).enumerate() {
+                        let sx = sample(ox as u32, w);
+                        px.copy_from_slice(&shade(diffuse, maps, l, flip_y, sx, sy).0);
+                    }
+                }
+            });
+        }
+    });
+    out
+}
+
+fn shade(
+    diffuse: &RgbaImage,
+    maps: &SpriteMaps,
+    l: &LightSettings,
+    flip_y: bool,
+    x: u32,
+    y: u32,
+) -> image::Rgba<u8> {
     let lp = Vec3::from(l.pos);
-    RgbaImage::from_fn(diffuse.width(), diffuse.height(), |x, y| {
-        let d = diffuse.get_pixel(x, y).0;
-        if d[3] == 0 {
-            return image::Rgba([0, 0, 0, 0]);
-        }
-        let np = maps.normal.get_pixel(x, y).0;
-        let mut n = Vec3::new(
-            np[0] as f32 / 127.5 - 1.0,
-            np[1] as f32 / 127.5 - 1.0,
-            np[2] as f32 / 127.5 - 1.0,
-        );
-        if flip_y {
-            n.y = -n.y;
-        }
-        // Convert to image space (y down).
-        let n = Vec3::new(n.x, -n.y, n.z).normalize_or(Vec3::Z);
-        let p = Vec3::new(x as f32 + 0.5, y as f32 + 0.5, 0.0);
-        let to_l = lp - p;
-        let dist = to_l.length().max(1e-3);
-        let ld = to_l / dist;
-        let atten = 1.0 / (1.0 + (dist / (lp.z.abs() * 4.0 + 64.0)).powi(2));
-        let mut diff = n.dot(ld).max(0.0) * atten * l.intensity;
-        let half = (ld + Vec3::Z).normalize();
-        let spec_mask = maps.specular.get_pixel(x, y).0[0] as f32 / 255.0;
-        let mut spec = n.dot(half).max(0.0).powf(l.shininess.max(1.0))
-            * l.specular
-            * spec_mask
-            * atten
-            * l.intensity;
-        if l.bands > 1 {
-            let b = l.bands as f32;
-            diff = (diff * b).floor() / b;
-            spec = (spec * b).floor() / b;
-        }
-        let ao = if l.use_occlusion {
-            maps.occlusion.get_pixel(x, y).0[0] as f32 / 255.0
-        } else {
-            1.0
-        };
-        let base = Vec3::new(d[0] as f32, d[1] as f32, d[2] as f32) / 255.0;
-        let lc = Vec3::from(l.color);
-        let amb = Vec3::from(l.ambient) * l.ambient_intensity * ao;
-        let c = base * (amb + lc * diff) + lc * spec;
-        image::Rgba([
-            (c.x.clamp(0.0, 1.0) * 255.0) as u8,
-            (c.y.clamp(0.0, 1.0) * 255.0) as u8,
-            (c.z.clamp(0.0, 1.0) * 255.0) as u8,
-            d[3],
-        ])
-    })
+    let d = diffuse.get_pixel(x, y).0;
+    if d[3] == 0 {
+        return image::Rgba([0, 0, 0, 0]);
+    }
+    let np = maps.normal.get_pixel(x, y).0;
+    let mut n = Vec3::new(
+        np[0] as f32 / 127.5 - 1.0,
+        np[1] as f32 / 127.5 - 1.0,
+        np[2] as f32 / 127.5 - 1.0,
+    );
+    if flip_y {
+        n.y = -n.y;
+    }
+    // Convert to image space (y down).
+    let n = Vec3::new(n.x, -n.y, n.z).normalize_or(Vec3::Z);
+    let p = Vec3::new(x as f32 + 0.5, y as f32 + 0.5, 0.0);
+    let to_l = lp - p;
+    let dist = to_l.length().max(1e-3);
+    let ld = to_l / dist;
+    let atten = 1.0 / (1.0 + (dist / (lp.z.abs() * 4.0 + 64.0)).powi(2));
+    let mut diff = n.dot(ld).max(0.0) * atten * l.intensity;
+    let half = (ld + Vec3::Z).normalize();
+    let spec_mask = maps.specular.get_pixel(x, y).0[0] as f32 / 255.0;
+    let mut spec = n.dot(half).max(0.0).powf(l.shininess.max(1.0))
+        * l.specular
+        * spec_mask
+        * atten
+        * l.intensity;
+    if l.bands > 1 {
+        let b = l.bands as f32;
+        diff = (diff * b).floor() / b;
+        spec = (spec * b).floor() / b;
+    }
+    let ao = if l.use_occlusion {
+        maps.occlusion.get_pixel(x, y).0[0] as f32 / 255.0
+    } else {
+        1.0
+    };
+    let base = Vec3::new(d[0] as f32, d[1] as f32, d[2] as f32) / 255.0;
+    let lc = Vec3::from(l.color);
+    let amb = Vec3::from(l.ambient) * l.ambient_intensity * ao;
+    let c = base * (amb + lc * diff) + lc * spec;
+    image::Rgba([
+        (c.x.clamp(0.0, 1.0) * 255.0) as u8,
+        (c.y.clamp(0.0, 1.0) * 255.0) as u8,
+        (c.z.clamp(0.0, 1.0) * 255.0) as u8,
+        d[3],
+    ])
 }
 
 /// Godot 4 CanvasTexture resource wiring diffuse + normal + specular for 2D lights.
@@ -432,5 +478,23 @@ mod tests {
         };
         let out = lit_preview(&img, &m, &l, false);
         assert!(out.get_pixel(6, 16).0[0] > out.get_pixel(25, 16).0[0]);
+    }
+
+    #[test]
+    fn stepped_preview_matches_full_preview_at_its_samples() {
+        // 33 px: the last stepped row/column clamps to the image edge.
+        let img = disc(33);
+        let m = generate(&img, &SpriteSettings::default());
+        let l = LightSettings {
+            pos: [5.0, 9.0, 20.0],
+            ..Default::default()
+        };
+        let full = lit_preview(&img, &m, &l, true);
+        let small = lit_preview_step(&img, &m, &l, true, 4);
+        assert_eq!(small.dimensions(), (9, 9));
+        for (x, y, p) in small.enumerate_pixels() {
+            let (sx, sy) = ((x * 4 + 2).min(32), (y * 4 + 2).min(32));
+            assert_eq!(p, full.get_pixel(sx, sy), "sample ({x},{y})");
+        }
     }
 }

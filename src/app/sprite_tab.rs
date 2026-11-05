@@ -87,6 +87,9 @@ impl Default for SpriteTab {
     }
 }
 
+/// Longest side of the interactive lit preview; bigger sprites are relit on a coarser grid.
+const LIT_PREVIEW_MAX: u32 = 1024;
+
 fn gray_to_rgba(g: &image::GrayImage) -> RgbaImage {
     DynamicImage::ImageLuma8(g.clone()).to_rgba8()
 }
@@ -184,7 +187,11 @@ impl SpriteTab {
     fn refresh(&mut self, ctx: &egui::Context) {
         let Some(src) = &self.source else { return };
         let key = serde_json::to_string(&self.settings).unwrap_or_default();
-        if key != self.last_key {
+        // Large images take a second or more to generate: wait for the slider to be
+        // released instead of regenerating on every frame of the drag.
+        let large = src.width().max(src.height()) > LIT_PREVIEW_MAX;
+        let dragging = ctx.input(|i| i.pointer.any_down());
+        if key != self.last_key && !(large && dragging && self.maps.is_some()) {
             self.last_key = key;
             self.maps = Some(sprite::generate(src, &self.settings));
             self.shown_key.clear();
@@ -202,7 +209,11 @@ impl SpriteTab {
         if shown != self.shown_key {
             self.shown_key = shown;
             let img = match self.view_mode {
-                MapView::Lit => sprite::lit_preview(src, m, &self.light, self.settings.flip_y),
+                MapView::Lit => {
+                    // The light follows the mouse, so relight at most ~1024 px per side.
+                    let step = src.width().max(src.height()).div_ceil(LIT_PREVIEW_MAX);
+                    sprite::lit_preview_step(src, m, &self.light, self.settings.flip_y, step)
+                }
                 MapView::Diffuse => src.clone(),
                 MapView::Normal => m.normal.clone(),
                 MapView::Specular => gray_to_rgba(&m.specular),

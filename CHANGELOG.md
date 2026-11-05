@@ -6,6 +6,12 @@ All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format fo
 
 ## [Unreleased]
 
+### Fixed
+- The Texture tab lagged with large (4K) images: it counted the original's colours on
+  every frame.
+- The Sprite Lights preview lagged with large images: the lit preview is now computed on
+  all cores and at most 1024 px wide, and the maps regenerate when a slider is released.
+
 ## [0.11.1] - 2026-11-06
 
 The first macOS build, and file-reference checks that work the same on every system.
