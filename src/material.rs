@@ -110,7 +110,7 @@ fn split_name(stem: &str) -> Option<(&str, MapKind, usize)> {
 /// The files of one material set.
 #[derive(Clone, Debug, Serialize)]
 pub struct MaterialFiles {
-    /// Shared name, e.g. `BricksWall_01`.
+    /// Shared name, e.g. `BricksWall_01`, reduced to `[A-Za-z0-9_-]` (see [`safe_name`]).
     pub name: String,
     pub maps: BTreeMap<MapKind, PathBuf>,
     /// The normal map is DirectX-style (green flipped on load).
@@ -126,6 +126,23 @@ impl MaterialFiles {
             .collect::<Vec<_>>()
             .join(", ")
     }
+}
+
+/// The set name is used as an output folder and inside the Godot `.tres`, so anything
+/// outside `[A-Za-z0-9_-]` becomes `_`: no `..` or separators (writing outside the
+/// output folder) and no quotes or newlines (injecting lines into the resource).
+pub fn safe_name(base: &str) -> String {
+    let s: String = base
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if s.is_empty() { "material".into() } else { s }
 }
 
 fn image_ext_rank(p: &Path) -> Option<usize> {
@@ -189,7 +206,7 @@ fn collect_set(base: &str, files: &[PathBuf]) -> Option<MaterialFiles> {
     }
     let directx_normal = best.get(&MapKind::Normal).is_some_and(|(_, _, dx)| *dx);
     Some(MaterialFiles {
-        name: base.to_string(),
+        name: safe_name(base),
         maps: best.into_iter().map(|(k, (_, p, _))| (k, p)).collect(),
         directx_normal,
     })
@@ -462,6 +479,7 @@ pub fn crunch_material(
 
 /// Godot 4 ORMMaterial3D using the written maps, with nearest filtering.
 pub fn godot_material(name: &str, cm: &CrunchedMaterial) -> String {
+    let name = &safe_name(name);
     let mut ext = Vec::new();
     let mut props = Vec::new();
     let mut add = |file: String, id: &str, lines: &[&str]| {
@@ -529,6 +547,7 @@ pub fn export(
     indexed: bool,
     godot: bool,
 ) -> Result<Vec<PathBuf>> {
+    let name = &safe_name(name);
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let mut written = Vec::new();
     let mut save = |suffix: &str, img: RgbaImage, indexed: bool| -> Result<()> {
@@ -688,6 +707,28 @@ mod tests {
         assert!(tres.contains("normal_enabled = true"));
         assert!(tres.contains("texture_filter = 0"));
         assert!(out.join("M_orm.png.import").exists());
+    }
+
+    #[test]
+    fn names_cannot_leave_the_output_folder_or_break_the_tres() {
+        assert_eq!(safe_name("BricksWall_01"), "BricksWall_01");
+        assert_eq!(safe_name(".."), "__");
+        assert_eq!(safe_name("a/../b"), "a____b");
+        assert_eq!(safe_name("x\"]\n[resource]"), "x____resource_");
+        assert_eq!(safe_name(""), "material");
+
+        // A set whose files start with ".." still gets a folder name inside `out`.
+        let dir = std::env::temp_dir().join("retrocrunch_material_names");
+        let _ = std::fs::remove_dir_all(&dir);
+        write_set(&dir, &[".._basecolor.png", ".._roughness.png"]);
+        let f = find_material(&dir.join(".._basecolor.png"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(f.name, "__");
+        let imgs = MaterialImages::load(&f).unwrap();
+        let cm = crunch_material(&imgs, &CrunchSettings::default(), None, &Default::default());
+        let tres = godot_material("q\"\nx", &cm);
+        assert!(tres.contains("path=\"q__x_albedo.png\""), "{tres}");
     }
 
     #[test]
