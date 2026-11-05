@@ -1047,7 +1047,11 @@ mod tests {
         let import = std::fs::read_to_string(dir.join("ball_test.png.import")).unwrap();
         assert!(import.contains("compress/mode=0") && import.contains("mipmaps/generate=false"));
         let glb_import = std::fs::read_to_string(dir.join("ball_test.glb.import")).unwrap();
-        assert!(glb_import.contains("meshes/generate_lods=false"));
+        assert!(glb_import.contains("\nmeshes/generate_lods=false\n"));
+        assert!(
+            glb_import.lines().all(|l| !l.starts_with(' ')),
+            "no indented lines"
+        );
         let back = Model::load(&dir.join("ball_test.obj")).unwrap();
         assert_eq!(back.tri_count(), m.tri_count());
         assert!(back.materials[0].albedo.is_some());

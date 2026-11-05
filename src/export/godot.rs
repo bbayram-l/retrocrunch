@@ -393,16 +393,12 @@ pub(super) fn godot_common_for(model: &Model) -> String {
 /// draw distant models with far fewer triangles than their PS1 budget (a 600-triangle
 /// character came out at 150), which breaks the look and every polygon count.
 pub fn godot_model_import() -> String {
-    "[remap]
-
-     importer=\"scene\"
-     importer_version=1
-     type=\"PackedScene\"
-
-     [params]
-
-     meshes/generate_lods=false
-"
+    "[remap]\n\n\
+     importer=\"scene\"\n\
+     importer_version=1\n\
+     type=\"PackedScene\"\n\n\
+     [params]\n\n\
+     meshes/generate_lods=false\n"
         .to_string()
 }
 
