@@ -6,10 +6,22 @@ All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format fo
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-11-06
+
+The first macOS build, and file-reference checks that work the same on every system.
+
 ### Added
 - macOS builds for Apple Silicon: `Retrocrunch.app` with a Fox icon, ad-hoc signed, in
   a zip with the guide and the Blender and Godot folders. Every tagged version is now
   published on GitHub Releases for Windows and macOS.
+
+### Fixed
+- File references inside models (textures, MTL files, glTF buffers) are checked the same
+  way on every system. On macOS, Windows-style references such as `C:\Users\...` or
+  `\\host\share\...` weren't recognised as pointing outside the model's folder.
+- glTF files whose buffer or image URIs contain a backslash are now refused on every
+  system. URIs must use `/`; on macOS a name with a backslash could be a different file
+  than the one checked.
 
 ## [0.11.0] - 2026-11-05
 
