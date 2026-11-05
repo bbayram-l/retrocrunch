@@ -42,7 +42,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
-          toolchain: stable
+          toolchain: "1.97.1" # same as ci.yml
 
       - name: Check the tag matches Cargo.toml
         working-directory: src
@@ -103,7 +103,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
-          toolchain: stable
+          toolchain: "1.97.1" # same as ci.yml
 
       - name: Check the tag matches Cargo.toml
         working-directory: src
