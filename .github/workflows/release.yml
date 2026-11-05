@@ -27,18 +27,21 @@ jobs:
     steps:
       # Source from the tag; packaging files from this workflow's commit, so older
       # tags can be released by hand too.
-      - uses: actions/checkout@v4
+      # Actions are pinned to commits; no build cache, so nothing from earlier runs
+      # can end up in a release.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.TAG }}
           path: src
-      - uses: actions/checkout@v4
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           path: ci
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
-          workspaces: src
+          toolchain: stable
 
       - name: Check the tag matches Cargo.toml
         working-directory: src
