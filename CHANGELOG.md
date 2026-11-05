@@ -6,6 +6,10 @@ All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format fo
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-05
+
+Cleaner, sharper rebaked textures.
+
 ### Fixed
 - Rebaked textures no longer take colour from a neighbouring surface the low-poly model
   keeps separately: a neck inside a collar picked up the collar's white and maroon, the
