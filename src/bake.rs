@@ -2,12 +2,14 @@
 //!
 //! * `unwrap_atlas` splits each piece into charts of faces whose normals stay within a
 //!   crease angle of the chart's seed (so projection never folds), projects every chart
-//!   onto its plane at a uniform texel density, and shelf-packs all charts into one
+//!   onto its plane at a uniform texel density, and skyline-packs all charts into one
 //!   square atlas with gutters.
 //! * `BakeSource` holds the full-resolution source surface (including "baked loose
 //!   pieces") in a BVH; `bake_atlas` shoots a ray per atlas texel from just outside the
-//!   low-poly surface back along its normal and samples the outermost source hit, so
-//!   detail floating on the surface (pockets, straps, decals) is painted into the texture.
+//!   low-poly surface back along its normal and samples the outermost source hit that
+//!   belongs to that surface, so detail floating on it (pockets, straps, decals) is
+//!   painted in, while a surface the low-poly model keeps separately (the collar around
+//!   a neck) stays out of its neighbour's texels.
 
 use crate::mesh::{Material, Piece, Vertex};
 use crate::texture::{self, BakeMaps};
@@ -183,7 +185,8 @@ fn build_charts(pieces: &[Piece], angle_deg: f32) -> Vec<Chart> {
     charts
 }
 
-/// Rotate a chart (15 degree steps) to the smallest bounding box, then measure it.
+/// Rotate a chart (15 degree steps) to the smallest bounding box, lying wider than tall
+/// (short skyline steps pack tighter), then measure it.
 fn orient_chart(c: &mut Chart) {
     let bbox = |pts: &[[Vec2; 3]], rot: Vec2| -> (Vec2, Vec2) {
         let mut lo = Vec2::splat(f32::MAX);
@@ -203,6 +206,12 @@ fn orient_chart(c: &mut Chart) {
             ((ha - la).x * (ha - la).y).total_cmp(&((hb - lb).x * (hb - lb).y))
         })
         .unwrap_or(Vec2::X);
+    let (lo, hi) = bbox(&c.corners, best);
+    let best = if (hi - lo).y > (hi - lo).x {
+        best.rotate(Vec2::Y)
+    } else {
+        best
+    };
     for tri in &mut c.corners {
         for p in tri.iter_mut() {
             *p = best.rotate(*p);
@@ -213,30 +222,66 @@ fn orient_chart(c: &mut Chart) {
     c.size = (hi - lo).max(Vec2::ZERO);
 }
 
-/// Shelf packing at `scale` texels per unit. Returns each chart's texel origin.
-fn shelf_pack(
+/// Skyline (bottom-left) packing at `scale` texels per unit: each chart drops into the
+/// lowest spot along the current top edge where it fits, so short charts fill the gaps
+/// next to tall ones. Returns each chart's texel origin.
+fn skyline_pack(
     charts: &[Chart],
     order: &[usize],
     scale: f32,
     n: u32,
     pad: u32,
 ) -> Option<Vec<(u32, u32)>> {
+    // Skyline segments (x, top y, width), left to right, covering [pad, n).
+    let mut sky: Vec<(u32, u32, u32)> = vec![(pad, pad, n.saturating_sub(pad))];
     let mut pos = vec![(0u32, 0u32); charts.len()];
-    let (mut x, mut y, mut row_h) = (pad, pad, 0u32);
     for &ci in order {
-        let w = (charts[ci].size.x * scale).ceil() as u32 + 1;
-        let h = (charts[ci].size.y * scale).ceil() as u32 + 1;
-        if x + w + pad > n {
-            x = pad;
-            y += row_h + pad;
-            row_h = 0;
+        // Footprint: the chart plus the gutter after it.
+        let w = (charts[ci].size.x * scale).ceil() as u32 + 1 + pad;
+        let h = (charts[ci].size.y * scale).ceil() as u32 + 1 + pad;
+        // Lowest (then leftmost) placement starting at a segment's left edge.
+        let mut best: Option<(u32, u32, usize)> = None;
+        for i in 0..sky.len() {
+            let x = sky[i].0;
+            if x + w > n {
+                break;
+            }
+            let (mut y, mut covered, mut j) = (0u32, 0u32, i);
+            while covered < w {
+                y = y.max(sky[j].1);
+                covered += sky[j].2;
+                j += 1;
+            }
+            if y + h <= n && best.is_none_or(|b| y < b.1) {
+                best = Some((x, y, i));
+            }
         }
-        if x + w + pad > n || y + h + pad > n {
-            return None;
-        }
+        let (x, y, i) = best?;
         pos[ci] = (x, y);
-        x += w + pad;
-        row_h = row_h.max(h);
+        // Raise the skyline under the chart: replace [x, x + w) with one segment.
+        // Segments from i on start at x and are contiguous, so trim them from the front.
+        let mut rest = w;
+        while rest > 0 {
+            if sky[i].2 <= rest {
+                rest -= sky[i].2;
+                sky.remove(i);
+            } else {
+                sky[i].0 += rest;
+                sky[i].2 -= rest;
+                rest = 0;
+            }
+        }
+        sky.insert(i, (x, y + h, w));
+        // Merge neighbours at the same height.
+        let mut k = 0;
+        while k + 1 < sky.len() {
+            if sky[k].1 == sky[k + 1].1 {
+                sky[k].2 += sky[k + 1].2;
+                sky.remove(k + 1);
+            } else {
+                k += 1;
+            }
+        }
     }
     Some(pos)
 }
@@ -300,7 +345,7 @@ pub fn unwrap_atlas_with_detail(
         let mut best = None;
         for _ in 0..24 {
             let mid = (lo + hi) * 0.5;
-            match shelf_pack(&charts, &order, mid, n, pad) {
+            match skyline_pack(&charts, &order, mid, n, pad) {
                 Some(p) => {
                     best = Some((mid, p));
                     lo = mid;
@@ -472,6 +517,21 @@ impl BakeSource {
         s
     }
 
+    /// Geometry only (no colours): for nearest-surface queries on the low-poly model.
+    fn geometry(pieces: &[Piece]) -> Self {
+        Self::new(
+            pieces,
+            &[],
+            &SourceMaps {
+                ao: false,
+                ao_strength: 0.0,
+                normal: false,
+                normal_strength: 0.0,
+                emissive: false,
+            },
+        )
+    }
+
     fn build(&mut self, node: usize, start: usize, end: usize) {
         let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
         let (mut clo, mut chi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
@@ -535,19 +595,17 @@ impl BakeSource {
         tf >= tn.max(0.0) && tn <= tmax
     }
 
-    /// Nearest hit along the ray within [0, tmax]. `front_only` ignores triangles whose
-    /// normal faces away from the ray origin.
-    fn ray(&self, o: Vec3, d: Vec3, tmax: f32, front_only: bool) -> Option<(usize, Vec3)> {
+    /// Every hit along the ray within [0, tmax], in no particular order:
+    /// `f(distance, triangle, barycentrics)`.
+    fn ray_hits(&self, o: Vec3, d: Vec3, tmax: f32, mut f: impl FnMut(f32, usize, Vec3)) {
         if self.nodes.is_empty() {
-            return None;
+            return;
         }
         let inv = Vec3::new(1.0 / d.x, 1.0 / d.y, 1.0 / d.z);
-        let mut best: Option<(f32, usize, Vec3)> = None;
         let mut stack = vec![0usize];
         while let Some(ni) = stack.pop() {
             let n = self.nodes[ni];
-            let limit = best.map_or(tmax, |b| b.0);
-            if !Self::ray_box(&n, o, inv, limit) {
+            if !Self::ray_box(&n, o, inv, tmax) {
                 continue;
             }
             if n.count == 0 {
@@ -557,10 +615,6 @@ impl BakeSource {
             }
             for &ti in &self.order[n.first as usize..(n.first + n.count) as usize] {
                 let t = &self.tris[ti as usize];
-                if front_only && t.n.dot(d) >= 0.0 {
-                    continue;
-                }
-                // Moller-Trumbore, two-sided.
                 let (e1, e2) = (t.p[1] - t.p[0], t.p[2] - t.p[0]);
                 let pv = d.cross(e2);
                 let det = e1.dot(pv);
@@ -579,12 +633,11 @@ impl BakeSource {
                     continue;
                 }
                 let dist = e2.dot(qv) * inv_det;
-                if dist >= 0.0 && dist <= best.map_or(tmax, |b| b.0) {
-                    best = Some((dist, ti as usize, Vec3::new(1.0 - u - v, u, v)));
+                if (0.0..=tmax).contains(&dist) {
+                    f(dist, ti as usize, Vec3::new(1.0 - u - v, u, v));
                 }
             }
         }
-        best.map(|b| (b.1, b.2))
     }
 
     /// Closest point on the source surface within `max_d`.
@@ -635,14 +688,29 @@ impl BakeSource {
         tex * base * vcol
     }
 
-    /// Outermost source colour seen from `p` along `-n`, starting `cage` above the surface.
-    pub fn color_at(&self, p: Vec3, n: Vec3, cage: f32) -> Option<Vec4> {
-        let o = p + n * cage;
-        let hit = self
-            .ray(o, -n, cage * 2.0, true)
-            .or_else(|| self.ray(o, -n, cage * 2.0, false))
-            .or_else(|| self.closest(p, cage * 2.0));
-        hit.map(|(t, b)| self.sample(t, b))
+    /// Source colour for low-poly point `p` with normal `n`: the outermost source hit along
+    /// `-n`, starting `cage` above the surface, that belongs to this surface. A hit much
+    /// nearer to another part of the low-poly model `low` (the collar around a neck, hair
+    /// kept as its own shell over a forehead) is that part's colour, so it is skipped.
+    /// Hits facing outward come first; the closest point is the last resort.
+    pub fn color_at(&self, p: Vec3, n: Vec3, cage: f32, low: &BakeSource) -> Option<Vec4> {
+        let (o, d) = (p + n * cage, -n);
+        let mut hits: Vec<(f32, usize, Vec3)> = Vec::new();
+        self.ray_hits(o, d, cage * 2.0, |t, ti, bary| hits.push((t, ti, bary)));
+        hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // Belongs here unless another low-poly surface is under half as far away.
+        let ours = |&(t, _, _): &&(f32, usize, Vec3)| {
+            let q = o + d * t;
+            low.closest(q, (q - p).length() * 0.5).is_none()
+        };
+        let front = |h: &&(f32, usize, Vec3)| self.tris[h.1].n.dot(d) < 0.0;
+        hits.iter()
+            .filter(front)
+            .find(ours)
+            .or_else(|| hits.iter().find(ours))
+            .map(|h| (h.1, h.2))
+            .or_else(|| self.closest(p, cage * 2.0))
+            .map(|(t, b)| self.sample(t, b))
     }
 }
 
@@ -806,6 +874,7 @@ pub fn bake_atlas(pieces: &[Piece], n: u32, src: &BakeSource, cage: f32, ss: u32
     }
     // 2. Trace ss x ss samples per texel in parallel and average the hits.
     let ss = ss.max(1);
+    let low = BakeSource::geometry(pieces);
     let trace = |&(idx, pi, ti): &(u32, u32, u32)| -> Option<Vec4> {
         let p = &pieces[pi as usize];
         let t = ti as usize;
@@ -821,7 +890,7 @@ pub fn bake_atlas(pieces: &[Piece], n: u32, src: &BakeSource, cage: f32, ss: u32
                     y + (j as f32 + 0.5) / ss as f32,
                 );
                 let (pos, nrm) = surface_at(p, t, uv, pt);
-                if let Some(c) = src.color_at(pos, nrm, cage) {
+                if let Some(c) = src.color_at(pos, nrm, cage, &low) {
                     acc += c;
                     hits += 1;
                 }
@@ -964,7 +1033,13 @@ mod tests {
             assert!(((q - p).length() - brute).abs() < 1e-4);
             // Ray from outside toward the centre hits the sphere near radius 1.
             let d = (-p).normalize();
-            let (ti, bary) = src.ray(p * 3.0, d, 100.0, true).unwrap();
+            let mut first: Option<(f32, usize, Vec3)> = None;
+            src.ray_hits(p * 3.0, d, 100.0, |t, ti, b| {
+                if first.is_none_or(|f| t < f.0) {
+                    first = Some((t, ti, b));
+                }
+            });
+            let (_, ti, bary) = first.unwrap();
             let t = &src.tris[ti];
             let hit = t.p[0] * bary.x + t.p[1] * bary.y + t.p[2] * bary.z;
             assert!(
@@ -1164,5 +1239,54 @@ mod tests {
             (g[0] as i32 - 128).abs() < 20 && (g[1] as i32 - 128).abs() < 20,
             "floor stays grey away from the patch, got {g:?}"
         );
+    }
+
+    #[test]
+    fn surface_keeps_its_colour_under_another_surface_within_reach() {
+        // A neck inside a collar: grey floor and, 2 cm above it, a red sheet that the
+        // low-poly model keeps as its own surface. The floor's texels must stay grey even
+        // though the red sheet is inside the 5 cm search distance.
+        let sheet = |y: f32, color: [f32; 4]| {
+            let v = |x: f32, z: f32| Vertex {
+                pos: Vec3::new(x, y, z),
+                normal: Vec3::Y,
+                uv: Vec2::new(x, z),
+                color,
+                ..Default::default()
+            };
+            Piece {
+                name: "s".into(),
+                vertices: vec![v(-1.0, -1.0), v(1.0, -1.0), v(1.0, 1.0), v(-1.0, 1.0)],
+                indices: vec![0, 2, 1, 0, 3, 2],
+                ..Default::default()
+            }
+        };
+        let floor = sheet(0.0, [0.5, 0.5, 0.5, 1.0]);
+        let over = sheet(0.02, [1.0, 0.0, 0.0, 1.0]);
+        let src = BakeSource::new(
+            &[floor.clone(), over.clone()],
+            &[],
+            &SourceMaps {
+                ao: false,
+                ao_strength: 0.0,
+                normal: false,
+                normal_strength: 0.0,
+                emissive: false,
+            },
+        );
+        let mut out = vec![floor, over];
+        unwrap_atlas(&mut out, 64, 1, 60.0).unwrap();
+        let img = bake_atlas(&out, 64, &src, 0.05, 2);
+        let at = |piece: &Piece| {
+            let uv = piece.vertices.iter().map(|v| v.uv).sum::<Vec2>() / 4.0;
+            img.get_pixel((uv.x * 64.0) as u32, (uv.y * 64.0) as u32).0
+        };
+        let c = at(&out[0]);
+        assert!(
+            (c[0] as i32 - 128).abs() < 20 && (c[1] as i32 - 128).abs() < 20,
+            "the floor keeps its own grey, got {c:?}"
+        );
+        let r = at(&out[1]);
+        assert!(r[0] > 200 && r[1] < 60, "the sheet stays red, got {r:?}");
     }
 }

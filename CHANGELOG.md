@@ -6,6 +6,16 @@ All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format fo
 
 ## [Unreleased]
 
+### Fixed
+- Rebaked textures no longer take colour from a neighbouring surface the low-poly model
+  keeps separately: a neck inside a collar picked up the collar's white and maroon, the
+  collar picked up skin and hair, an ear picked up hair. The bake still paints detail that
+  decimation removed (pockets, straps, baked pieces) onto the surface beneath it.
+
+### Changed
+- UV atlases pack about 15-50% more texels onto the model (charts lie flat and fill the
+  gaps between taller ones), so the same texture size looks sharper.
+
 ## [0.9.0] - 2026-11-04
 
 First release as Retrocrunch, and the first ready-built release on itch.io.
