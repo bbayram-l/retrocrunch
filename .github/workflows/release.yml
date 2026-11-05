@@ -1,0 +1,95 @@
+# Builds the Windows release zip and publishes it as a GitHub release.
+# Runs when a version tag (v1.2.3) is pushed, or by hand for an existing tag.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release, e.g. v0.11.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      # Static CRT: the exe runs without the Visual C++ redistributable.
+      RUSTFLAGS: -C target-feature=+crt-static
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      # Source from the tag; packaging files from this workflow's commit, so older
+      # tags can be released by hand too.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          path: src
+      - uses: actions/checkout@v4
+        with:
+          path: ci
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+
+      - name: Check the tag matches Cargo.toml
+        working-directory: src
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' |
+            Select-Object -First 1).Matches.Groups[1].Value
+          if ("v$version" -ne $env:TAG) { throw "Tag $env:TAG doesn't match Cargo.toml version $version" }
+          "VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Test
+        working-directory: src
+        run: cargo test --release --locked
+
+      - name: Build
+        working-directory: src
+        run: cargo build --release --locked
+
+      - name: Package
+        run: |
+          $name = "retrocrunch-$env:VERSION"
+          $dir = "dist/$name"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item src/target/release/retrocrunch.exe $dir
+          (Get-Content ci/packaging/README.txt -Raw).Replace('@VERSION@', $env:VERSION) |
+            Set-Content "$dir/README.txt" -NoNewline
+          Copy-Item src/docs/GUIDE.md, src/AGENTS.md, src/CHANGELOG.md, src/LICENSE.md, src/THIRD_PARTY_LICENSES.html $dir
+          Copy-Item -Recurse src/blender, src/godot $dir
+          Compress-Archive -Path $dir -DestinationPath "dist/$name-windows-x64.zip"
+          "ZIP=dist/$name-windows-x64.zip" >> $env:GITHUB_ENV
+
+      - name: Smoke test the packaged exe
+        run: |
+          Expand-Archive $env:ZIP -DestinationPath smoke
+          & "smoke/retrocrunch-$env:VERSION/retrocrunch.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw "exe failed to start" }
+
+      - name: Release notes from CHANGELOG.md
+        run: |
+          $log = Get-Content src/CHANGELOG.md -Raw
+          $section = [regex]::Match($log, "(?ms)^## \[$([regex]::Escape($env:VERSION))\][^\n]*\n(.*?)(?=^## \[|\z)").Groups[1].Value.Trim()
+          if (-not $section) { throw "No CHANGELOG.md section for $env:VERSION" }
+          $section + "`n`nAlso on itch.io: https://laegh.itch.io/retrocrunch" | Set-Content notes.md
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view $env:TAG --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:TAG $env:ZIP --clobber --repo $env:GITHUB_REPOSITORY
+          } else {
+            gh release create $env:TAG $env:ZIP --repo $env:GITHUB_REPOSITORY `
+              --title "Retrocrunch $env:VERSION" --notes-file notes.md --verify-tag
+          }
