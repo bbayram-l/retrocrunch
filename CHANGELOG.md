@@ -6,6 +6,11 @@ All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format fo
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-05
+
+PS1 budgets for whole scenes: polygons counted the PS1 way, and two Godot tools that
+measure and simulate a scene's cost.
+
 ### Fixed
 - Reduced characters no longer lose their arms and legs when one part (a dense, seamed
   head) resists reduction: at 600 triangles CesiumMan kept 587 on the head and almost

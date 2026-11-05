@@ -1,6 +1,6 @@
 [package]
 name = "retrocrunch"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 # PolyForm Shield 1.0.0 (not an SPDX id); godot/ and blender/ are MIT-0. See LICENSE.md.
 license-file = "LICENSE.md"
