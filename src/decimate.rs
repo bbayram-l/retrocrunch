@@ -368,10 +368,16 @@ mod tests {
             .iter()
             .map(|v| if v.pos.y > 0.8 { 1.0 } else { 0.0 })
             .collect();
-        let cap_tris = |p: &Piece| {
+        // Triangles in the focus area, by the same rule as `focus_split`.
+        let in_focus = |p: &Piece| {
             p.indices
                 .chunks_exact(3)
-                .filter(|t| t.iter().all(|&i| p.vertices[i as usize].pos.y > 0.75))
+                .filter(|t| {
+                    t.iter()
+                        .filter(|&&i| p.vertices[i as usize].pos.y > 0.8)
+                        .count()
+                        >= 2
+                })
                 .count()
         };
         let opt = DecimateOptions::default();
@@ -379,12 +385,13 @@ mod tests {
         let focused = decimate_with_detail(&s, 300, &opt, &priority, 3.0);
         let total = focused.tri_count();
         assert!((240..=360).contains(&total), "total budget kept: {total}");
-        // Area x 3 => about a quarter of the budget, far more than uniform reduction.
+        // Uniform reduction would leave the cap ~10% of 300 (~30); area x 3 aims for
+        // ~75 (66 on Windows). Measured against the budget, not a plain reduction, whose
+        // exact layout differs between platforms' floating-point maths.
         assert!(
-            cap_tris(&focused) >= 2 * cap_tris(&plain).max(1),
-            "cap {} vs plain {}",
-            cap_tris(&focused),
-            cap_tris(&plain)
+            in_focus(&focused) >= 50,
+            "focus area kept {}",
+            in_focus(&focused)
         );
         // No new open edges along the focus border (edges used once, by position).
         let open_edges = |p: &Piece| {
