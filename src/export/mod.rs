@@ -94,7 +94,7 @@ impl EnginePreset {
     pub fn import_notes(self) -> &'static str {
         match self {
             Self::Godot => {
-                "Godot 4: copy the folder into your project. Open the .tscn: every mesh already uses a psx_*.gdshader material (vertex snapping, affine UVs, dither, 15-bit colour, nearest filtering): psx_opaque, psx_cutout (alpha-tested) or psx_blend (translucent), with _double variants for double-sided materials. Shared code is in psx_common.gdshaderinc. Tweak 'snap_lines' on a material for more or less jitter. Keep the Environment tonemap on Linear for colours that match the retrocrunch preview.\n\nScreen pass (optional, recommended): add a Control with psx_screen.gd as your main scene's root UI node and put the 3D level (with its camera) under it. It renders at 240 lines, upscales with nearest filtering and does the PS1 dither + 15-bit once per virtual pixel (psx_post.gdshader), switching those off in the materials.\n\nPS1 speed (optional): add a Node with psx_speed_limit.gd inside the 3D scene. It counts the triangles drawn each frame and caps the frame rate like the PS1 GPU (180 textured polygons per ms): 60 fps up to 3000, 30 up to 6000, 20 up to 9000. Turn on show_stats to see the count.\n\nThe .png.import files tell Godot to keep textures lossless and without VRAM compression, so the palette survives; HD textures (over 512 px) get mipmaps."
+                "Godot 4: copy the folder into your project. Open the .tscn: every mesh already uses a psx_*.gdshader material (vertex snapping, affine UVs, dither, 15-bit colour, nearest filtering): psx_opaque, psx_cutout (alpha-tested) or psx_blend (translucent), with _double variants for double-sided materials. Shared code is in psx_common.gdshaderinc. Tweak 'snap_lines' on a material for more or less jitter. Keep the Environment tonemap on Linear for colours that match the retrocrunch preview.\n\nScreen pass (optional, recommended): add a Control with psx_screen.gd as your main scene's root UI node and put the 3D level (with its camera) under it. It renders at 240 lines, upscales with nearest filtering and does the PS1 dither + 15-bit once per virtual pixel (psx_post.gdshader), switching those off in the materials.\n\nPS1 speed (optional): add a Node with psx_speed_limit.gd inside the 3D scene. It counts the triangles drawn each frame and caps the frame rate like the PS1 GPU (180 textured polygons per ms): 60 fps up to 3000, 30 up to 6000, 20 up to 9000. Turn on show_stats to see the count.\n\nThe .png.import files tell Godot to keep textures lossless and without VRAM compression, so the palette survives; HD textures (over 512 px) get mipmaps. The .glb.import files turn off Godot's automatic mesh LODs, so models are always drawn with the triangles you converted them to."
             }
             Self::Unity => {
                 "Unity: drop the .fbx (or .obj) and .png into Assets. For rigged models set Rig > Animation Type = Humanoid (or Generic) and apply. Select the PNG: Filter Mode = Point, Compression = None, Generate Mip Maps = off. Use an Unlit/Texture (or URP Unlit) material; vertex colours need a vertex-colour shader."
@@ -257,6 +257,16 @@ pub fn export_model(model: &Model, dir: &Path, s: &ExportSettings) -> Result<Vec
         }
     }
     if s.godot_scene {
+        let glbs: Vec<PathBuf> = written
+            .iter()
+            .filter(|f| f.extension().is_some_and(|e| e == "glb"))
+            .cloned()
+            .collect();
+        for g in glbs {
+            let p = g.with_extension("glb.import");
+            std::fs::write(&p, godot_model_import())?;
+            written.push(p);
+        }
         let common = dir.join("psx_common.gdshaderinc");
         std::fs::write(&common, godot_common_for(model))?;
         written.push(common);
@@ -1036,6 +1046,8 @@ mod tests {
         assert!(dir.join("psx_speed_limit.gd").is_file());
         let import = std::fs::read_to_string(dir.join("ball_test.png.import")).unwrap();
         assert!(import.contains("compress/mode=0") && import.contains("mipmaps/generate=false"));
+        let glb_import = std::fs::read_to_string(dir.join("ball_test.glb.import")).unwrap();
+        assert!(glb_import.contains("meshes/generate_lods=false"));
         let back = Model::load(&dir.join("ball_test.obj")).unwrap();
         assert_eq!(back.tri_count(), m.tri_count());
         assert!(back.materials[0].albedo.is_some());

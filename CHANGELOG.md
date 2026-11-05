@@ -6,6 +6,12 @@ All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format fo
 
 ## [Unreleased]
 
+### Fixed
+- Godot exports now include a `.glb.import` that turns off Godot's automatic mesh LODs.
+  Godot drew distant models with a fraction of their triangles (a 600-triangle
+  character at 150), so they looked smoother than the budget and every polygon count
+  was off.
+
 ### Added
 - Model reports (`inspect_model`, and `source`/`result` in `convert_model`) count
   `quads` and `polygons` next to `triangles`, for budgets in the PS1 sense where a flat

@@ -172,7 +172,7 @@ They share `psx_common.gdshaderinc`: vertex snapping to `snap_lines` (the width 
 
 Click a row to select the object. Textures imported with VRAM compression (Godot's default for textures embedded in a `.glb`) are flagged, because compression blends the palette and the colour count is then only a guess.
 
-**Import settings.** The `.png.import` files keep textures lossless without VRAM compression (Godot's "Detect 3D" would otherwise compress them and smear the palette) and keep transparent texels exact. HD textures (over 512 px) get mipmaps, sampled with nearest-mipmap filtering.
+**Import settings.** The `.png.import` files keep textures lossless without VRAM compression (Godot's "Detect 3D" would otherwise compress them and smear the palette) and keep transparent texels exact. HD textures (over 512 px) get mipmaps, sampled with nearest-mipmap filtering. The `.glb.import` files turn off Godot's generated mesh LODs: without them Godot draws distant models with a fraction of their triangles (a 600-triangle character at 150), which breaks both the PS1 look and every polygon count. Use retrocrunch's own `lods` option for distance LODs.
 
 Rigged models import with a `Skeleton3D`, a skinned mesh and an `AnimationPlayer` holding every clip. Godot moves skinned meshes under the skeleton, so their `.tscn` uses `psx_apply_materials.gd` (a `@tool` script on the root) to assign the PSX materials by material name.
 

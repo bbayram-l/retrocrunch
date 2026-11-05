@@ -389,6 +389,23 @@ pub(super) fn godot_common_for(model: &Model) -> String {
 /// Godot 4 texture import settings: lossless, no VRAM compression (Godot's "Detect 3D"
 /// would otherwise switch to it and smear the palette), exact transparent texels.
 /// Mipmaps only for HD textures, whose shader samples them.
+/// Import settings for an exported `.glb`: no generated mesh LODs. Godot would otherwise
+/// draw distant models with far fewer triangles than their PS1 budget (a 600-triangle
+/// character came out at 150), which breaks the look and every polygon count.
+pub fn godot_model_import() -> String {
+    "[remap]
+
+     importer=\"scene\"
+     importer_version=1
+     type=\"PackedScene\"
+
+     [params]
+
+     meshes/generate_lods=false
+"
+        .to_string()
+}
+
 pub fn godot_texture_import(mipmaps: bool) -> String {
     format!(
         "[remap]\n\n\
