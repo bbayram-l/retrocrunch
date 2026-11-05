@@ -86,8 +86,9 @@ jobs:
           if-no-files-found: error
 
   macos:
-    # Apple Silicon runner: the app is built for arm64 Macs.
-    runs-on: macos-14
+    # Apple Silicon runner (macos-latest is arm64): the app is built for arm64 Macs.
+    # Not pinned to a version: GitHub retires old macOS images and the job then fails.
+    runs-on: macos-latest
     env:
       MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
