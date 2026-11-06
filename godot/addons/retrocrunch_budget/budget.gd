@@ -10,8 +10,6 @@ extends RefCounted
 
 ## Sony's figure for textured, Gouraud-lit polygons per second.
 const POLYS_PER_SECOND := 180000
-## 1 MB of VRAM minus two 320x240 16-bit framebuffers.
-const VRAM_BUDGET_KB := 724.0
 const QUAD_MAX_ANGLE_DEG := 10.0
 ## Objects covering less than this share of the view height count as small on screen.
 const SMALL_ON_SCREEN := 0.05
@@ -103,6 +101,12 @@ static func analyze(root: Node, camera: Camera3D, target_polys: int) -> Dictiona
 		"fps": fps_for(view_polys),
 		"clip": clip,
 	}
+
+
+## Texture memory left in `vram_mb` of VRAM after `framebuffers` 16-bit buffers of
+## `size`. The PS1 default, 1 MB with two 320x240 buffers, leaves 724 KB.
+static func vram_budget_kb(vram_mb: int, framebuffers: int, size: Vector2i) -> float:
+	return vram_mb * 1024.0 - framebuffers * size.x * size.y * 2 / 1024.0
 
 
 ## PS1 frame rate for `polys` per frame at 60 Hz, waiting for vsync like the hardware.

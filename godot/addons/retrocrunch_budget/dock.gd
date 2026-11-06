@@ -6,14 +6,25 @@ signal analyze_requested
 signal node_picked(node: Node)
 
 const Budget := preload("budget.gd")
-const TARGETS := [3000, 6000]
 const RED := Color(1.0, 0.45, 0.4)
 const ORANGE := Color(1.0, 0.75, 0.35)
+const VRAM_MB := [1, 2, 4, 8]
+## PS1 display modes (16-bit framebuffers). 640x480 is the interlaced hi-res mode.
+const RESOLUTIONS := [
+	Vector2i(256, 240), Vector2i(320, 240), Vector2i(368, 240),
+	Vector2i(512, 240), Vector2i(640, 480),
+]
+## Settings are kept per project in the editor's metadata, not in project.godot.
+const META := "retrocrunch_budget"
 
-var target_option: OptionButton
+var polys_box: SpinBox
+var vram_option: OptionButton
+var buffers_option: OptionButton
+var resolution_option: OptionButton
 var scene_camera: CheckBox
 var summary: Label
 var tree: Tree
+var _has_result := false
 
 
 func _init() -> void:
@@ -25,16 +36,33 @@ func _init() -> void:
 	button.tooltip_text = "Measure the open scene against PS1 limits"
 	button.pressed.connect(func(): analyze_requested.emit())
 	bar.add_child(button)
-	target_option = OptionButton.new()
-	target_option.add_item("3000 polys (60 fps)")
-	target_option.add_item("6000 polys (30 fps)")
-	target_option.select(1)
-	target_option.tooltip_text = "Polygons a PS1 draws per frame at 60 or 30 fps"
-	bar.add_child(target_option)
 	scene_camera = CheckBox.new()
 	scene_camera.text = "Scene camera"
 	scene_camera.tooltip_text = "Measure from the scene's camera instead of the editor view"
 	bar.add_child(scene_camera)
+
+	var grid := GridContainer.new()
+	grid.columns = 2
+	add_child(grid)
+	polys_box = SpinBox.new()
+	polys_box.min_value = 100
+	polys_box.max_value = 200000
+	polys_box.step = 100
+	polys_box.value = _load("polys", 6000)
+	polys_box.suffix = "polys"
+	polys_box.tooltip_text = "Polygons in view per frame: 3000 runs at 60 fps on a PS1, 6000 at 30"
+	_row(grid, "Budget", polys_box)
+	vram_option = _option(["1 MB (PS1)", "2 MB", "4 MB", "8 MB"], "vram", 0,
+		"VRAM size: 1 MB is a PS1; more for arcade boards or a higher-detail mode")
+	_row(grid, "VRAM", vram_option)
+	buffers_option = _option(["0", "1", "2 (double buffered)"], "buffers", 2,
+		"Framebuffers kept in VRAM: most games used 2, some 1; 0 frees all of it for textures")
+	_row(grid, "Framebuffers", buffers_option)
+	var names: Array = RESOLUTIONS.map(func(r): return "%dx%d" % [r.x, r.y])
+	resolution_option = _option(names, "resolution", 1, "Framebuffer size (16-bit)")
+	_row(grid, "Resolution", resolution_option)
+	polys_box.value_changed.connect(func(v): _changed("polys", int(v)))
+
 	summary = Label.new()
 	summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	summary.text = "Press Analyze to measure the open scene."
@@ -63,22 +91,72 @@ func _ui_scale() -> float:
 	return 1.0
 
 
+func _row(grid: GridContainer, label: String, control: Control) -> void:
+	var l := Label.new()
+	l.text = label
+	grid.add_child(l)
+	control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	grid.add_child(control)
+
+
+func _option(items: Array, key: String, default: int, tip: String) -> OptionButton:
+	var o := OptionButton.new()
+	for item in items:
+		o.add_item(item)
+	o.select(clampi(_load(key, default), 0, items.size() - 1))
+	o.tooltip_text = tip
+	o.item_selected.connect(func(i): _changed(key, i))
+	return o
+
+
+func _settings() -> EditorSettings:
+	if Engine.is_editor_hint() and Engine.has_singleton("EditorInterface"):
+		return Engine.get_singleton("EditorInterface").get_editor_settings()
+	return null
+
+
+func _load(key: String, default: int) -> int:
+	var s := _settings()
+	return int(s.get_project_metadata(META, key, default)) if s else default
+
+
+## Save the setting and, if results are showing, measure again with it.
+func _changed(key: String, value: int) -> void:
+	var s := _settings()
+	if s:
+		s.set_project_metadata(META, key, value)
+	if _has_result:
+		analyze_requested.emit()
+
+
 func target() -> int:
-	return TARGETS[target_option.selected]
+	return int(polys_box.value)
+
+
+## Texture memory left after the framebuffers, from the VRAM settings.
+func vram_budget_kb() -> float:
+	return Budget.vram_budget_kb(
+		VRAM_MB[vram_option.selected], buffers_option.selected,
+		RESOLUTIONS[resolution_option.selected]
+	)
 
 
 func show_result(r: Dictionary) -> void:
+	_has_result = true
 	var goal := target()
+	var budget_kb := vram_budget_kb()
 	var lines := PackedStringArray()
 	lines.append("In view: %d polys (%d tris) of %d -> PS1 about %d fps" % [r.view_polys, r.view_tris, goal, r.fps])
 	lines.append("Whole scene: %d polys" % r.scene_polys)
-	lines.append("Textures: %.1f KB of %d KB VRAM" % [r.vram_kb, Budget.VRAM_BUDGET_KB])
+	lines.append("Textures: %.1f KB of %.0f KB free VRAM" % [r.vram_kb, maxf(budget_kb, 0.0)])
+	if budget_kb < 0.0:
+		lines.append("The framebuffers alone need %.0f KB more than this VRAM." % -budget_kb)
 	if r.clip.is_empty():
 		lines.append("The view fits the budget." if r.view_polys <= goal else "No camera: can't suggest what to clip.")
 	else:
 		lines.append("To fit, clip: " + ", ".join(r.clip.map(func(o): return str(o.node.name))))
 	summary.text = "\n".join(lines)
-	var over: bool = r.view_polys > goal or r.vram_kb > Budget.VRAM_BUDGET_KB
+	var over: bool = r.view_polys > goal or r.vram_kb > budget_kb
 	summary.add_theme_color_override("font_color", RED if over else Color(0.6, 1.0, 0.6))
 
 	tree.clear()

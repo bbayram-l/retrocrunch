@@ -15,6 +15,13 @@ All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format fo
   relief can be baked into the colour instead. "Batch materials..." does every set in a
   folder and its subfolders. DirectX normal maps are converted to OpenGL. Also as
   `crunch_texture {material: true}` and `retrocrunch texture --material`.
+- Godot: `psx_draw_distance.gd` (written with every Godot export) finds how far the
+  camera can see before the objects in view pass a polygon budget, and cuts everything
+  farther (like Silent Hill without its fog) or tints it red. A debug tool for finding
+  how far each scene can draw.
+- The Godot PS1 Budget dock's limits are settings, saved per project: polygon budget,
+  VRAM size (1, 2, 4 or 8 MB), framebuffers kept in VRAM (0, 1 or 2) and their
+  resolution. Free texture memory follows from them (724 KB for the PS1 default).
 
 ### Fixed
 - The Texture tab lagged with large (4K) images: it counted the original's colours on

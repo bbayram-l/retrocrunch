@@ -41,6 +41,8 @@ Godot (optional)
 ----------------
 Godot exports include psx_speed_limit.gd: add it as a Node in your 3D scene and it caps
 the frame rate to what a PS1 could draw (60 fps up to 3000 polygons, 30 up to 6000).
+psx_draw_distance.gd (also a Node) cuts or tints everything beyond the distance where
+the view would pass a polygon budget, to see how far each scene can draw.
 For whole scenes, copy godot/addons/retrocrunch_budget into your project's addons
 folder and enable "Retrocrunch PS1 Budget" under Project Settings > Plugins.
 
