@@ -1,0 +1,16 @@
+; Retrocrunch PS1 budget demo. Open this folder in Godot 4 (tested with 4.7.2).
+config_version=5
+
+[application]
+
+config/name="Retrocrunch PS1 Budget Demo"
+run/main_scene="res://demo.tscn"
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/retrocrunch_budget/plugin.cfg")

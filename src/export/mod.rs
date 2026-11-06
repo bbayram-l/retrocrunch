@@ -1000,6 +1000,45 @@ mod tests {
         );
     }
 
+    /// The demo project in examples/godot_demo needs its own copies of the scripts (Godot
+    /// can't load files outside a project); they must stay identical to the shipped ones.
+    #[test]
+    fn godot_demo_uses_the_shipped_scripts() {
+        let pairs = [
+            (
+                include_str!("../../godot/psx_speed_limit.gd"),
+                include_str!("../../examples/godot_demo/psx_speed_limit.gd"),
+            ),
+            (
+                include_str!("../../godot/psx_draw_distance.gd"),
+                include_str!("../../examples/godot_demo/psx_draw_distance.gd"),
+            ),
+            (
+                include_str!("../../godot/addons/retrocrunch_budget/budget.gd"),
+                include_str!("../../examples/godot_demo/addons/retrocrunch_budget/budget.gd"),
+            ),
+            (
+                include_str!("../../godot/addons/retrocrunch_budget/dock.gd"),
+                include_str!("../../examples/godot_demo/addons/retrocrunch_budget/dock.gd"),
+            ),
+            (
+                include_str!("../../godot/addons/retrocrunch_budget/plugin.gd"),
+                include_str!("../../examples/godot_demo/addons/retrocrunch_budget/plugin.gd"),
+            ),
+            (
+                include_str!("../../godot/addons/retrocrunch_budget/plugin.cfg"),
+                include_str!("../../examples/godot_demo/addons/retrocrunch_budget/plugin.cfg"),
+            ),
+        ];
+        for (i, (shipped, demo)) in pairs.iter().enumerate() {
+            assert_eq!(
+                shipped.replace("\r\n", "\n"),
+                demo.replace("\r\n", "\n"),
+                "examples/godot_demo copy #{i} is out of date: copy it from godot/"
+            );
+        }
+    }
+
     #[test]
     fn godot_variant_follows_alpha_and_sides() {
         let mut m = Material::default();

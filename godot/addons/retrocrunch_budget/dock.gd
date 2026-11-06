@@ -16,6 +16,8 @@ const RESOLUTIONS := [
 ]
 ## Settings are kept per project in the editor's metadata, not in project.godot.
 const META := "retrocrunch_budget"
+## Objects named in the "To fit" line; the rest are marked in the list.
+const CLIP_NAMES_SHOWN := 4
 
 var polys_box: SpinBox
 var vram_option: OptionButton
@@ -154,7 +156,13 @@ func show_result(r: Dictionary) -> void:
 	if r.clip.is_empty():
 		lines.append("The view fits the budget." if r.view_polys <= goal else "No camera: can't suggest what to clip.")
 	else:
-		lines.append("To fit, clip: " + ", ".join(r.clip.map(func(o): return str(o.node.name))))
+		# Farthest first; a big scene can need over a hundred, so name only a few.
+		var names: Array = r.clip.map(func(o): return str(o.node.name))
+		var nearest: float = r.clip.map(func(o): return o.distance).min()
+		var shown := ", ".join(names.slice(0, CLIP_NAMES_SHOWN))
+		if names.size() > CLIP_NAMES_SHOWN:
+			shown += " and %d more (red in the list)" % (names.size() - CLIP_NAMES_SHOWN)
+		lines.append("To fit, draw only up to %.1f m: clip %s" % [nearest, shown])
 	summary.text = "\n".join(lines)
 	var over: bool = r.view_polys > goal or r.vram_kb > budget_kb
 	summary.add_theme_color_override("font_color", RED if over else Color(0.6, 1.0, 0.6))

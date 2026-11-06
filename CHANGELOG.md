@@ -22,6 +22,12 @@ All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format fo
 - The Godot PS1 Budget dock's limits are settings, saved per project: polygon budget,
   VRAM size (1, 2, 4 or 8 MB), framebuffers kept in VRAM (0, 1 or 2) and their
   resolution. Free texture memory follows from them (724 KB for the PS1 default).
+- `examples/godot_demo`: a Godot project for trying the speed limit, the draw distance
+  and the budget dock on a street that's far over budget, with a fly camera.
+
+### Changed
+- The budget dock's "To fit" line now gives the distance to draw up to and names only
+  the farthest few objects to clip; a big street listed over a hundred.
 
 ### Fixed
 - The Texture tab lagged with large (4K) images: it counted the original's colours on
