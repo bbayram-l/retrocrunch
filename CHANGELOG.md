@@ -6,6 +6,31 @@ All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format fo
 
 ## [Unreleased]
 
+Closer to the PS1 hardware (as documented in psx-spx), with each big change behind a
+switch that's off by default. See "PS1 accuracy switches" in the guide.
+
+### Added
+- Godot: `psx_lights.gd` has an Authentic mode: three lights per object plus ambient,
+  as the GTE's light matrix held, with point and spot lights turned into a direction
+  from the light to the object, dimmed by distance, the way PS1 games did on the CPU.
+  Extended (8 lights per vertex) stays the default.
+- PS1 sorting data (Export > PS1 sorting data, `--ps1-sort`, `ps1_sort`): every triangle
+  gets its own vertices carrying its centre, so `flat_depth` sorts by the average depth
+  of the corners like the PS1's ordering table, the same in every renderer.
+- Godot PS1 materials: `stp_mode` (only partly transparent texels blend in the PS1 blend
+  modes, opaque ones draw solid, like the STP bit), `fog_ps1_curve` (fog follows
+  1/distance like the GTE's depth cueing), `ps1_dither_rule` (no dither on unlit
+  textures and flat untextured surfaces, like the GPU) and `near_drop` (polygons too
+  near the camera are dropped, as PS1 games did instead of clipping).
+- The demo renders under the 240-line screen pass, with split walls, night fog that
+  ends at the draw distance, help behind F1 and keys for the new switches (P, G, J, O).
+
+### Changed
+- PS1 blend modes read the background at 5 bits per channel, as the 15-bit
+  framebuffer holds it.
+- The debug readouts (speed limit, draw distance, heatmap legend, VRAM overlay) draw on
+  the root canvas, so they stay sharp under the screen pass.
+
 ## [0.12.0] - 2026-11-06
 
 PS1 limits for whole Godot scenes, and PS1 rendering details for Godot: moving

@@ -49,7 +49,8 @@ func _ready() -> void:
 	_layer = CanvasLayer.new()
 	_layer.layer = 126
 	_layer.visible = visible
-	add_child(_layer)
+	# On the root canvas: stays sharp under psx_screen.gd's low-resolution pass.
+	get_tree().root.add_child.call_deferred(_layer)
 	_view = Control.new()
 	_view.anchor_left = 1.0
 	_view.anchor_right = 1.0
@@ -317,3 +318,10 @@ static func _in_frustum(box: AABB, planes: Array[Plane]) -> bool:
 		if p.is_point_over(corner):
 			return false
 	return true
+
+
+## The overlay lives on the root canvas, not under this node: free it with the node. Not on
+## _exit_tree, which also runs when psx_screen.gd moves the scene into its viewport.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE and is_instance_valid(_layer):
+		_layer.queue_free()

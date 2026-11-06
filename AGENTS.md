@@ -98,7 +98,8 @@ docs/GUIDE.md, "Scene budget dock").
 - `convert_model`: `lods` (0-4) writes half-resolution LOD GLBs, and Godot scenes of
   static models switch between them by distance. `tessellate` (0-3) writes near-camera
   versions with long edges split (`_near1.glb`...) that Godot scenes show up close,
-  against affine texture warping. `rigid`: `"one-bone"` (stiff joints,
+  against affine texture warping. `ps1_sort` stores each triangle's centre so the
+  Godot materials' `flat_depth` sorts by average depth like the PS1 (triples vertices). `rigid`: `"one-bone"` (stiff joints,
   closed mesh) or `"segments"` (solid blocks per bone, seams) for rigged models.
 - `build_blocks`: `light: {}` bakes AO + sun shadows into the level's vertex colours
   (fields: ao, ao_strength, sun, sun_yaw, sun_pitch, sun_strength, ambient).

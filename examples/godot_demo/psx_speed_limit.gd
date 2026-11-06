@@ -35,6 +35,7 @@ enum Shading { TEXTURED_GOURAUD, FLAT }
 var polygons := 0
 var fps_cap := 0
 
+var _ui_layer: CanvasLayer
 var _old_max_fps := 0
 var _label: Label
 
@@ -49,7 +50,9 @@ func _ready() -> void:
 		_label.add_theme_color_override("font_outline_color", Color.BLACK)
 		_label.add_theme_constant_override("outline_size", 4)
 		layer.add_child(_label)
-		add_child(layer)
+		# On the root canvas: stays sharp under psx_screen.gd's low-resolution pass.
+		_ui_layer = layer
+		get_tree().root.add_child.call_deferred(layer)
 
 
 func _exit_tree() -> void:
@@ -88,3 +91,10 @@ func cap_for(polys: int) -> int:
 		var frames := maxi(1, (polys * refresh + rate - 1) / rate)
 		return maxi(1, refresh / frames)
 	return clampi(rate / maxi(polys, 1), 1, refresh)
+
+
+## The overlay lives on the root canvas, not under this node: free it with the node. Not on
+## _exit_tree, which also runs when psx_screen.gd moves the scene into its viewport.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE and is_instance_valid(_ui_layer):
+		_ui_layer.queue_free()

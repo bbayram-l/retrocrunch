@@ -188,6 +188,26 @@ impl Piece {
         self.indices.len() / 3
     }
 
+    /// Every triangle with its own three vertices (indices become 0, 1, 2, ...), skin,
+    /// colours, morph deltas and detail copied along. For per-triangle vertex data such
+    /// as the triangle centres of a PS1-sorted export.
+    pub fn unwelded(&self) -> Piece {
+        let order: Vec<usize> = self.indices.iter().map(|&i| i as usize).collect();
+        let mut out = self.clone();
+        out.vertices = order.iter().map(|&i| self.vertices[i]).collect();
+        out.indices = (0..order.len() as u32).collect();
+        for m in &mut out.morphs {
+            m.remap(&order);
+        }
+        if !self.detail.is_empty() {
+            out.detail = order
+                .iter()
+                .map(|&i| self.detail.get(i).copied().unwrap_or(0.0))
+                .collect();
+        }
+        out
+    }
+
     pub fn surface_area(&self) -> f32 {
         self.indices
             .chunks_exact(3)

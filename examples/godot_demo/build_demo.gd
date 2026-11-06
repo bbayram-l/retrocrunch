@@ -1,16 +1,29 @@
 extends SceneTree
-## Builds demo.tscn: a street at night that is far over a PS1 polygon budget, so the
-## speed limit, draw distance and budget dock all have something to show.
+## Builds demo.tscn: a street at night that is far over a PS1 polygon budget, rendered
+## with retrocrunch's PS1 materials under the 240-line screen pass, so every Godot tool
+## has something to show.
 ## Rebuild with:  godot --headless --path . -s build_demo.gd
 ## Only Godot's built-in meshes and generated textures: no third-party assets.
 
-var demo: Node3D
+var demo: Node
+var world: Node3D
 
 
 func _initialize() -> void:
-	demo = Node3D.new()
+	demo = Node.new()
 	demo.name = "Demo"
 	demo.set_script(load("res://demo.gd"))
+	# The PS1 screen pass: everything 3D renders at 240 lines under it, with the dither
+	# and 15-bit colour once per virtual pixel, then scales up with nearest filtering.
+	var screen := Control.new()
+	screen.name = "Screen"
+	screen.set_script(load("res://psx_screen.gd"))
+	demo.add_child(screen)
+	screen.owner = demo
+	world = Node3D.new()
+	world.name = "World"
+	screen.add_child(world)
+	world.owner = demo
 
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
@@ -69,11 +82,15 @@ func _initialize() -> void:
 				v.set_meta("retrocrunch_tri_ratio", b[2])
 			_add(v, b[0], tile)
 
-	# Buildings: cheap boxes (12 triangles), a few shared sizes.
+	# Buildings: boxes with every face split 3x3, as PS1 artists split big walls so the
+	# affine texture warping stays small (108 triangles each).
 	var boxes: Array[BoxMesh] = []
 	for size in [Vector3(7, 8, 9), Vector3(8, 14, 10), Vector3(6, 20, 8), Vector3(9, 11, 9)]:
 		var b := BoxMesh.new()
 		b.size = size
+		b.subdivide_width = 2
+		b.subdivide_height = 2
+		b.subdivide_depth = 2
 		b.material = brick
 		boxes.append(b)
 	var street := Node3D.new()
@@ -196,6 +213,7 @@ func _initialize() -> void:
 
 	var vram := Node.new()
 	vram.set_script(load("res://psx_vram_overlay.gd"))
+	vram.set("visible", false)
 	_add(vram, "VramOverlay")
 
 	var lights := Node.new()
@@ -214,7 +232,7 @@ func _initialize() -> void:
 
 func _add(node: Node, node_name: String, parent: Node = null) -> void:
 	node.name = node_name
-	(parent if parent else demo).add_child(node)
+	(parent if parent else world).add_child(node)
 	node.owner = demo
 
 
@@ -228,6 +246,11 @@ func _material(tex: Texture2D, uv_scale: Vector3, color := Color.WHITE, shader :
 		m.set_shader_parameter("albedo_texture", tex)
 	m.set_shader_parameter("uv_scale", Vector2(uv_scale.x, uv_scale.y))
 	m.set_shader_parameter("tint", Vector4(color.r, color.g, color.b, 1.0))
+	# Night fog in the sky's colour; demo.gd keeps it ending at the draw distance.
+	m.set_shader_parameter("fog_enabled", true)
+	m.set_shader_parameter("fog_color", Vector4(0.06, 0.06, 0.12, 1.0))
+	m.set_shader_parameter("fog_start", 12.0)
+	m.set_shader_parameter("fog_end", 40.0)
 	return m
 
 

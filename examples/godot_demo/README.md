@@ -11,6 +11,7 @@ Open this folder in Godot 4 (tested with 4.7.2) and press Play (F5).
 
 | Key | Does |
 |---|---|
+| F1 | show or hide all keys and what's on |
 | Right mouse (hold) | look around |
 | W A S D / Q E | move / down, up (Shift: faster) |
 | 1 / 2 / 3 | draw distance: Cut / Tint / Off |
@@ -21,20 +22,32 @@ Open this folder in Godot 4 (tested with 4.7.2) and press Play (F5).
 | F3 | VRAM overlay on/off |
 | F | flashlight on/off |
 | K | PS1 flat depth (no z-buffer) on/off |
+| P | 240-line PS1 screen or full resolution |
+| G | fog on/off (it ends where the draw distance cuts) |
+| J | lights: Extended (8 per vertex) or Authentic (3 per object, like the PS1) |
+| O | PS1 accuracy switches: fog curve, dither rule, near-polygon drop |
 
 Tint draws every cut object a second time, so it turns the speed limit off; it also
 switches the heatmap off, since both colour objects.
 
 ## What to look for
 
-Everything is drawn with Retrocrunch's PS1 materials (`psx_opaque.gdshader`): vertex
-snapping, affine texture warping (watch the brick walls), 15-bit colour and dither.
+Everything is drawn with Retrocrunch's PS1 materials (`psx_opaque.gdshader`) under the
+240-line screen pass (`Screen` node, `psx_screen.gd`): vertex snapping, affine texture
+warping, and the dither and 15-bit colour once per virtual pixel, as on a PS1. The walls
+are split 3x3 per face, as PS1 artists did to keep the warping small. Night fog ends
+where the draw distance cuts, so the cut is hidden, Silent Hill's trick (G).
 
 - **Moving lights** (`PS1Lights` node, `psx_lights.gd`): the moon, 13 street lamps and
   your flashlight (F) are ordinary Godot lights; the node passes the nearest 8 to the PS1
   materials, which light each vertex like the PS1. The lamp heads glow with the PS1's
   additive semi-transparency (`psx_add_double.gdshader`). Lighting is per vertex, so the
-  flashlight shows best on the finely split road tiles right in front of you.
+  flashlight shows best on the finely split road tiles right in front of you. J switches
+  to Authentic: three lights per object, point lights turned into directions, as PS1
+  games lit things.
+- **PS1 accuracy switches** (O): the PS1's fog curve (1/distance), its dither rule and
+  dropping polygons that come too close, instead of clipping them. Walk into a wall to
+  see it vanish. The guide's "PS1 accuracy switches" lists them all.
 - **PS1 sorting** (K): every material gets `flat_depth`, one depth per triangle, like a PS1
   with no z-buffer. Walk close to the trees and buildings and watch big polygons pop in
   front of smaller ones.
@@ -68,8 +81,8 @@ dock's distance is longer than the draw distance node's.
 - `demo.tscn`, made by `build_demo.gd` (rebuild: `godot --headless --path . -s build_demo.gd`)
 - `demo.gd`: the keys and help text; `fly_camera.gd`: the camera
 - `psx_speed_limit.gd`, `psx_draw_distance.gd`, `psx_detail_heatmap.gd`,
-  `psx_vram_overlay.gd`, `psx_lights.gd`, `psx_common.gdshaderinc` and
-  `addons/retrocrunch_budget`: copies of the files in Retrocrunch's `godot/` folder;
+  `psx_vram_overlay.gd`, `psx_lights.gd`, `psx_screen.gd`, `psx_post.gdshader`,
+  `psx_common.gdshaderinc` and `addons/retrocrunch_budget`: copies of the files in Retrocrunch's `godot/` folder;
   `psx_opaque.gdshader` and `psx_add_double.gdshader` are what an export writes (a test
   keeps all of them identical)
 

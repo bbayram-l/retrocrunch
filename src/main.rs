@@ -285,6 +285,10 @@ struct ModelArgs {
     /// up close, against affine texture warping (static models).
     #[arg(long, default_value_t = 0)]
     tessellate: u32,
+    /// Store each triangle's centre so Godot's flat_depth sorts by average depth, like
+    /// the PS1's ordering table (triples the vertex count).
+    #[arg(long)]
+    ps1_sort: bool,
     /// How much extra detail the face keeps [default: 4; 1 = off].
     #[arg(long)]
     focus_strength: Option<f32>,
@@ -565,6 +569,7 @@ fn main() -> Result<()> {
                 rigid: a.rigid,
                 lods: a.lods,
                 tessellate: a.tessellate,
+                ps1_sort: a.ps1_sort,
                 focus_strength: a.focus_strength,
             };
             ops::convert_model(&o, &progress)?

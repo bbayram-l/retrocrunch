@@ -155,6 +155,8 @@ pub struct ModelOptions {
     /// Near-camera tessellation levels (0-3): versions with long edges split that
     /// Godot scenes of static models show up close.
     pub tessellate: u32,
+    /// Per-triangle centres for PS1 average-depth sorting (flat_depth) in Godot.
+    pub ps1_sort: bool,
     /// Keep more triangles/texels on the automatically found head (default on).
     pub focus_face: bool,
     /// Focus strength (default 4; 1 = off).
@@ -190,6 +192,7 @@ impl Default for ModelOptions {
             rigid: "off".into(),
             lods: 0,
             tessellate: 0,
+            ps1_sort: false,
             focus_face: true,
             focus_strength: None,
         }
@@ -266,6 +269,9 @@ pub fn convert_model(o: &ModelOptions, progress: process::Progress) -> Result<Va
     }
     if o.tessellate > 0 {
         es.tessellate = o.tessellate.min(export::MAX_TESSELLATE);
+    }
+    if o.ps1_sort {
+        es.ps1_sort = true;
     }
     let dir = o.output_dir.join(export::sanitize(&model.name));
     let files = export::export_model(&c.model, &dir, &es)?;

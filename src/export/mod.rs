@@ -94,7 +94,7 @@ impl EnginePreset {
     pub fn import_notes(self) -> &'static str {
         match self {
             Self::Godot => {
-                "Godot 4: copy the folder into your project. Open the .tscn: every mesh already uses a psx_*.gdshader material (vertex snapping, affine UVs, dither, 15-bit colour, nearest filtering): psx_opaque, psx_cutout (alpha-tested) or psx_blend (translucent), with _double variants for double-sided materials. Shared code is in psx_common.gdshaderinc. Tweak 'snap_lines' on a material for more or less jitter. Keep the Environment tonemap on Linear for colours that match the retrocrunch preview.\n\nScreen pass (optional, recommended): add a Control with psx_screen.gd as your main scene's root UI node and put the 3D level (with its camera) under it. It renders at 240 lines, upscales with nearest filtering and does the PS1 dither + 15-bit once per virtual pixel (psx_post.gdshader), switching those off in the materials.\n\nPS1 speed (optional): add a Node with psx_speed_limit.gd inside the 3D scene. It counts the triangles drawn each frame and caps the frame rate like the PS1 GPU (180 textured polygons per ms): 60 fps up to 3000, 30 up to 6000, 20 up to 9000. Turn on show_stats to see the count.\n\nDraw distance (optional, debug): add a Node with psx_draw_distance.gd inside the 3D scene. It finds how far the camera can see before the objects in view pass a polygon budget (6000 by default) and cuts everything farther, or tints it red, so you can see how far each scene can draw.\n\nVRAM overlay (optional, debug): add a Node with psx_vram_overlay.gd. It packs the textures on screen into a picture of PS1 video memory (framebuffers, texture pages, colour tables) in the corner and says what doesn't fit; F3 shows and hides it.\n\nNear detail: models exported with tessellate have _near1.glb... versions with long edges split, which the .tscn shows up close, like PS1 games did against affine texture warping. Add a Node with psx_detail_heatmap.gd to colour them by how many triangles they add (yellow 2x to red 8x; LODs blue).\n\nMoving lights (optional): the PSX materials are unshaded, so Godot's lights don't reach them. Add a Node with psx_lights.gd and light the scene with ordinary DirectionalLight3D, OmniLight3D and SpotLight3D nodes: up to 8 light each vertex, like the PS1's GTE.\n\nPS1 sorting: tick flat_depth on a material to give each triangle one depth, so big polygons sort as a whole like on a PS1 (no z-buffer); depth_bias nudges it. Semi-transparency: a material named ..._avg, _add, _add25 or _sub gets the PS1 blend mode (B/2+F/2, B+F, B+F/4, B-F, computed on 8-bit values like the hardware).\n\nThe .png.import files tell Godot to keep textures lossless and without VRAM compression, so the palette survives; HD textures (over 512 px) get mipmaps. The .glb.import files turn off Godot's automatic mesh LODs, so models are always drawn with the triangles you converted them to."
+                "Godot 4: copy the folder into your project. Open the .tscn: every mesh already uses a psx_*.gdshader material (vertex snapping, affine UVs, dither, 15-bit colour, nearest filtering): psx_opaque, psx_cutout (alpha-tested) or psx_blend (translucent), with _double variants for double-sided materials. Shared code is in psx_common.gdshaderinc. Tweak 'snap_lines' on a material for more or less jitter. Keep the Environment tonemap on Linear for colours that match the retrocrunch preview.\n\nScreen pass (optional, recommended): add a Control with psx_screen.gd as your main scene's root UI node and put the 3D level (with its camera) under it. It renders at 240 lines, upscales with nearest filtering and does the PS1 dither + 15-bit once per virtual pixel (psx_post.gdshader), switching those off in the materials.\n\nPS1 speed (optional): add a Node with psx_speed_limit.gd inside the 3D scene. It counts the triangles drawn each frame and caps the frame rate like the PS1 GPU (180 textured polygons per ms): 60 fps up to 3000, 30 up to 6000, 20 up to 9000. Turn on show_stats to see the count.\n\nDraw distance (optional, debug): add a Node with psx_draw_distance.gd inside the 3D scene. It finds how far the camera can see before the objects in view pass a polygon budget (6000 by default) and cuts everything farther, or tints it red, so you can see how far each scene can draw.\n\nVRAM overlay (optional, debug): add a Node with psx_vram_overlay.gd. It packs the textures on screen into a picture of PS1 video memory (framebuffers, texture pages, colour tables) in the corner and says what doesn't fit; F3 shows and hides it.\n\nNear detail: models exported with tessellate have _near1.glb... versions with long edges split, which the .tscn shows up close, like PS1 games did against affine texture warping. Add a Node with psx_detail_heatmap.gd to colour them by how many triangles they add (yellow 2x to red 8x; LODs blue).\n\nMoving lights (optional): the PSX materials are unshaded, so Godot's lights don't reach them. Add a Node with psx_lights.gd and light the scene with ordinary DirectionalLight3D, OmniLight3D and SpotLight3D nodes: up to 8 light each vertex, like the PS1's GTE.\n\nPS1 sorting: tick flat_depth on a material to give each triangle one depth, so big polygons sort as a whole like on a PS1 (no z-buffer); depth_bias nudges it. Semi-transparency: a material named ..._avg, _add, _add25 or _sub gets the PS1 blend mode (B/2+F/2, B+F, B+F/4, B-F, computed on 8-bit values like the hardware).\n\nPS1 accuracy switches (all off by default, see the guide's \"PS1 accuracy switches\"): psx_lights.gd Mode = Authentic (3 lights per object, as the GTE held); export with PS1 sorting data so flat_depth sorts by each triangle's average depth; and the material parameters stp_mode, fog_ps1_curve, ps1_dither_rule and near_drop.\n\nThe .png.import files tell Godot to keep textures lossless and without VRAM compression, so the palette survives; HD textures (over 512 px) get mipmaps. The .glb.import files turn off Godot's automatic mesh LODs, so models are always drawn with the triangles you converted them to."
             }
             Self::Unity => {
                 "Unity: drop the .fbx (or .obj) and .png into Assets. For rigged models set Rig > Animation Type = Humanoid (or Generic) and apply. Select the PNG: Filter Mode = Point, Compression = None, Generate Mip Maps = off. Use an Unlit/Texture (or URP Unlit) material; vertex colours need a vertex-colour shader."
@@ -138,6 +138,11 @@ pub struct ExportSettings {
     /// big polygons near the camera to hide affine texture warping. 0 = off, max 3.
     #[serde(default)]
     pub tessellate: u32,
+    /// Give every triangle its own vertices carrying the offset to its centre (TEXCOORD_2/3,
+    /// CUSTOM0 in Godot), so the PS1 materials' flat_depth sorts triangles by their average
+    /// depth like the PS1. Triples the vertex count; off by default.
+    #[serde(default)]
+    pub ps1_sort: bool,
 }
 
 fn yes() -> bool {
@@ -158,6 +163,7 @@ impl Default for ExportSettings {
             fbx: false,
             lods: 0,
             tessellate: 0,
+            ps1_sort: false,
         }
     }
 }
@@ -241,10 +247,10 @@ pub fn export_model(model: &Model, dir: &Path, s: &ExportSettings) -> Result<Vec
     };
     if s.glb || s.godot_scene || s.fbx {
         let p = dir.join(format!("{base}.glb"));
-        std::fs::write(&p, glb_bytes(model, s.unlit)?)?;
+        std::fs::write(&p, glb_bytes_opts(model, s.unlit, s.ps1_sort)?)?;
         for lod in lods.iter().chain(&nears) {
             let lp = dir.join(format!("{}.glb", sanitize(&lod.name)));
-            std::fs::write(&lp, glb_bytes(lod, s.unlit)?)?;
+            std::fs::write(&lp, glb_bytes_opts(lod, s.unlit, s.ps1_sort)?)?;
             written.push(lp);
         }
         if s.fbx {
@@ -491,6 +497,14 @@ impl BinBuilder {
 }
 
 pub fn glb_bytes(model: &Model, unlit: bool) -> Result<Vec<u8>> {
+    glb_bytes_opts(model, unlit, false)
+}
+
+/// `triangle_centres`: every triangle gets its own vertices, and each vertex carries the
+/// offset from itself to its triangle's centre in TEXCOORD_2 (x, y) and TEXCOORD_3 (z),
+/// which Godot imports as CUSTOM0. The PS1 materials' flat_depth then sorts every
+/// triangle by its average depth, like the PS1's ordering table (AVSZ3).
+pub fn glb_bytes_opts(model: &Model, unlit: bool, triangle_centres: bool) -> Result<Vec<u8>> {
     let mut b = BinBuilder {
         data: Vec::new(),
         views: Vec::new(),
@@ -532,6 +546,13 @@ pub fn glb_bytes(model: &Model, unlit: bool) -> Result<Vec<u8>> {
         if p.indices.is_empty() {
             continue;
         }
+        let unwelded;
+        let p = if triangle_centres {
+            unwelded = p.unwelded();
+            &unwelded
+        } else {
+            p
+        };
         let pos: Vec<f32> = p.vertices.iter().flat_map(|v| v.pos.to_array()).collect();
         let nrm: Vec<f32> = p
             .vertices
@@ -546,6 +567,21 @@ pub fn glb_bytes(model: &Model, unlit: bool) -> Result<Vec<u8>> {
             "TEXCOORD_0": b.accessor_f32(&uv, 2, "VEC2", false),
             "COLOR_0": b.accessor_f32(&col, 4, "VEC4", false),
         });
+        if triangle_centres {
+            let (mut xy, mut z) = (Vec::new(), Vec::new());
+            for t in p.vertices.chunks_exact(3) {
+                let centre = (t[0].pos + t[1].pos + t[2].pos) / 3.0;
+                for v in t {
+                    let o = centre - v.pos;
+                    xy.extend([o.x, o.y]);
+                    z.extend([o.z, 0.0]);
+                }
+            }
+            // glTF wants consecutive UV sets: TEXCOORD_1 repeats the main UVs.
+            attrs["TEXCOORD_1"] = json!(b.accessor_f32(&uv, 2, "VEC2", false));
+            attrs["TEXCOORD_2"] = json!(b.accessor_f32(&xy, 2, "VEC2", false));
+            attrs["TEXCOORD_3"] = json!(b.accessor_f32(&z, 2, "VEC2", false));
+        }
         let skin = p.skin.filter(|&s| rig.is_some_and(|r| s < r.skins.len()));
         if skin.is_some() {
             let joints: Vec<u16> = p.vertices.iter().flat_map(|v| v.joints).collect();
@@ -927,6 +963,39 @@ mod tests {
     }
 
     #[test]
+    fn ps1_sort_stores_each_triangles_centre() {
+        let m = model();
+        let bytes = glb_bytes_opts(&m, true, true).unwrap();
+        let (doc, buffers, _) = gltf::import_slice(&bytes).unwrap();
+        let prim = doc.meshes().next().unwrap().primitives().next().unwrap();
+        let r = prim.reader(|b| Some(&buffers[b.index()]));
+        let pos: Vec<[f32; 3]> = r.read_positions().unwrap().collect();
+        let xy: Vec<[f32; 2]> = r.read_tex_coords(2).unwrap().into_f32().collect();
+        let z: Vec<[f32; 2]> = r.read_tex_coords(3).unwrap().into_f32().collect();
+        assert!(
+            r.read_tex_coords(1).is_some(),
+            "UV sets must be consecutive"
+        );
+        // Unwelded: one vertex per triangle corner.
+        assert_eq!(pos.len(), m.pieces[0].indices.len());
+        for (t, tri) in pos.chunks_exact(3).enumerate() {
+            let centre = tri
+                .iter()
+                .fold(glam::Vec3::ZERO, |a, p| a + glam::Vec3::from(*p))
+                / 3.0;
+            for k in 0..3 {
+                let i = t * 3 + k;
+                let got = glam::Vec3::from(pos[i]) + glam::Vec3::new(xy[i][0], xy[i][1], z[i][0]);
+                assert!(got.distance(centre) < 1e-5, "triangle {t} corner {k}");
+            }
+        }
+        // Off by default: shared vertices, no extra UV sets.
+        let (doc, _, _) = gltf::import_slice(glb_bytes(&m, true).unwrap()).unwrap();
+        let prim = doc.meshes().next().unwrap().primitives().next().unwrap();
+        assert!(prim.get(&gltf::Semantic::TexCoords(2)).is_none());
+    }
+
+    #[test]
     fn glb_roundtrips_through_gltf_crate() {
         let m = model();
         let bytes = glb_bytes(&m, true).unwrap();
@@ -1168,6 +1237,14 @@ mod tests {
             (
                 include_str!("../../godot/psx_lights.gd"),
                 include_str!("../../examples/godot_demo/psx_lights.gd"),
+            ),
+            (
+                include_str!("../../godot/psx_screen.gd"),
+                include_str!("../../examples/godot_demo/psx_screen.gd"),
+            ),
+            (
+                include_str!("../../godot/psx_post.gdshader"),
+                include_str!("../../examples/godot_demo/psx_post.gdshader"),
             ),
         ];
         for (i, (shipped, demo)) in pairs.iter().enumerate() {

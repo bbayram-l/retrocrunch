@@ -48,13 +48,27 @@ uniform float alpha_cutoff : hint_range(0.0, 1.0) = 0.5;
 // values, not in Godot's linear light, so the blend reads the screen and does it here.
 uniform sampler2D psx_background : hint_screen_texture, filter_nearest;
 #endif
-// No z-buffer, like the PS1: every triangle gets one depth (from its first vertex), so
-// big polygons sort as a whole and can pop in front of nearby objects. The shader always
-// writes depth, which costs the GPU's early depth test even when this is off.
+// No z-buffer, like the PS1: every triangle gets one depth (its average with ps1_sort
+// exports, else one corner's), so big polygons sort as a whole and can pop in front of
+// nearby objects. The shader always writes depth, which costs the GPU's early depth test
+// even when this is off.
 uniform bool flat_depth = false;
 // Moves this material's triangles nearer (negative) or farther in that sorting, like a
 // PS1 game nudging an object's ordering-table slot.
 uniform float depth_bias : hint_range(-0.01, 0.01) = 0.0;
+// Optional PS1 accuracy switches (off = retrocrunch's usual look):
+// PS1 dither rule: the GPU dithered only Gouraud-shaded or colour-modulated polygons, so
+// unlit textures (vertex colour neutral) and flat untextured surfaces stay undithered.
+uniform bool ps1_dither_rule = false;
+// Drop triangles with a vertex nearer than this (world units, 0 = off). The PS1 had no
+// near-plane clipping: games threw away polygons that came too close, so big floor and
+// wall polygons vanish up close instead of being clipped.
+uniform float near_drop = 0.0;
+#ifdef PSX_SEMI
+// PS1 STP bit: only texels with partial alpha (0.5..0.99) blend; fully opaque texels draw
+// solid, as texels without the semi-transparency bit did. Off: every visible texel blends.
+uniform bool stp_mode = false;
+#endif
 
 // Set every frame by psx_lights.gd; with no lights the baked vertex colours are used as
 // they are. World space. pos.w: 0 directional (xyz = direction to the light), 1 point,
@@ -66,6 +80,17 @@ uniform vec4 psx_ambient = vec4(1.0);
 uniform vec4 psx_light_pos[PSX_MAX_LIGHTS];
 uniform vec4 psx_light_color[PSX_MAX_LIGHTS];
 uniform vec4 psx_light_spot[PSX_MAX_LIGHTS];
+// Per-object lights, the PS1 way (psx_lights.gd in Authentic mode): the GTE held three
+// directional lights plus ambient, and games turned nearby point lights into directions
+// per object on the CPU. psx_obj_lights = 1 uses these instead of the lights above.
+instance uniform int psx_obj_lights = 0;
+instance uniform vec4 psx_obj_ambient = vec4(1.0);
+instance uniform vec4 psx_obj_dir0 = vec4(0.0);
+instance uniform vec4 psx_obj_dir1 = vec4(0.0);
+instance uniform vec4 psx_obj_dir2 = vec4(0.0);
+instance uniform vec4 psx_obj_col0 = vec4(0.0);
+instance uniform vec4 psx_obj_col1 = vec4(0.0);
+instance uniform vec4 psx_obj_col2 = vec4(0.0);
 
 group_uniforms fog;
 uniform bool fog_enabled = false;
@@ -73,6 +98,9 @@ uniform bool fog_enabled = false;
 uniform vec4 fog_color = vec4(0.05, 0.05, 0.08, 1.0);
 uniform float fog_start = 8.0;
 uniform float fog_end = 30.0;
+// PS1 depth cueing: the GTE's fog follows 1/distance (from the perspective divide), so it
+// thickens quickly near fog_start and slowly towards fog_end. Off: linear in distance.
+uniform bool fog_ps1_curve = false;
 group_uniforms;
 
 // value * w and w are interpolated perspective-correctly; their ratio is screen-linear
@@ -119,24 +147,51 @@ void vertex() {
 		clip.xy = round(clip.xy / clip.w * half_res) / half_res * clip.w;
 	}
 	POSITION = clip;
-	// Depth of this vertex as the depth buffer stores it (reversed: nearer = larger, in
-	// every renderer in Godot 4.7); one vertex's value is kept for the whole triangle (the
-	// first in Forward+/Mobile, the last in Compatibility). OpenGL's clip range is -1..1.
+	if (near_drop > 0.0 && -view_pos.z < near_drop) {
+		// A NaN vertex makes the GPU throw the whole triangle away, like the PS1 did.
+		POSITION = vec4(uintBitsToFloat(0x7fc00000u));
+	}
+	// The depth a whole triangle sorts by, as the depth buffer stores it (reversed:
+	// nearer = larger, in every renderer in Godot 4.7). The PS1 sorted by the AVERAGE depth
+	// of a polygon's corners: meshes exported with ps1_sort carry each triangle's centre
+	// (offset from the vertex) in CUSTOM0, so all three corners compute the same centre.
+	// Without it, one corner's depth is used (the first in Forward+/Mobile, the last in
+	// Compatibility). OpenGL's clip range is -1..1.
+	vec4 sort_clip = clip;
+	if (flat_depth) {
+		sort_clip = PROJECTION_MATRIX * (MODELVIEW_MATRIX * vec4(VERTEX + CUSTOM0.xyz, 1.0));
+	}
 #if CURRENT_RENDERER == RENDERER_COMPATIBILITY
-	triangle_depth = clip.z / clip.w * 0.5 + 0.5;
+	triangle_depth = sort_clip.z / sort_clip.w * 0.5 + 0.5;
 #else
-	triangle_depth = clip.z / clip.w;
+	triangle_depth = sort_clip.z / sort_clip.w;
 #endif
 	float w = mix(1.0, clip.w, affine_mapping ? clamp(affine_weight, 0.0, 1.0) : 0.0);
 	affine_uv = vec3(UV * w, w);
 	vec4 base = use_vertex_color ? COLOR : vec4(1.0);
-	if (psx_light_count > 0) {
+	if (psx_obj_lights == 1) {
+		vec3 wn = normalize(MODEL_NORMAL_MATRIX * NORMAL);
+		vec3 light = psx_obj_ambient.rgb
+			+ psx_obj_col0.rgb * max(dot(wn, psx_obj_dir0.xyz), 0.0)
+			+ psx_obj_col1.rgb * max(dot(wn, psx_obj_dir1.xyz), 0.0)
+			+ psx_obj_col2.rgb * max(dot(wn, psx_obj_dir2.xyz), 0.0);
+		base.rgb *= clamp(light, 0.0, 2.0);
+	} else if (psx_light_count > 0) {
 		vec3 wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 		vec3 wn = normalize(MODEL_NORMAL_MATRIX * NORMAL);
 		base.rgb *= psx_lighting(wp, wn);
 	}
 	affine_color = base * w;
-	float f = clamp((-view_pos.z - fog_start) / max(fog_end - fog_start, 0.001), 0.0, 1.0);
+	float dist = -view_pos.z;
+	float f;
+	if (fog_ps1_curve) {
+		// Linear in 1/distance, like the GTE's depth cueing (IR0 from H/SZ).
+		float near_inv = 1.0 / max(fog_start, 0.001);
+		float far_inv = 1.0 / max(fog_end, fog_start + 0.001);
+		f = clamp((near_inv - 1.0 / max(dist, 0.001)) / max(near_inv - far_inv, 1e-6), 0.0, 1.0);
+	} else {
+		f = clamp((dist - fog_start) / max(fog_end - fog_start, 0.001), 0.0, 1.0);
+	}
 	fog_w = vec2((fog_enabled ? f : 0.0) * clip.w, clip.w);
 }
 
@@ -161,7 +216,12 @@ void fragment() {
 	vec4 tex = use_texture ? texture(albedo_texture, uv) : vec4(1.0);
 	vec3 s = tex.rgb * col.rgb * tint.rgb * 255.0;
 	s = mix(s, fog_color.rgb * 255.0, fog_w.x / max(fog_w.y, 1e-6));
-	if (dither) {
+	// The PS1 skipped dither on raw textures (no colour modulation) and flat untextured
+	// polygons; neutral vertex colour (1.0) counts as unmodulated here.
+	bool unmodulated = use_texture
+		? all(lessThan(abs(col.rgb * tint.rgb - vec3(1.0)), vec3(0.004)))
+		: !use_vertex_color && psx_light_count == 0 && psx_obj_lights == 0;
+	if (dither && !(ps1_dither_rule && unmodulated)) {
 		ivec2 p = ivec2(FRAGCOORD.xy) & ivec2(3);
 		s += PS1_DITHER[p.y * 4 + p.x];
 	}
@@ -174,20 +234,26 @@ void fragment() {
 	// skipped; the rest combine with what's behind (B) by a fixed rule on 8-bit values:
 	// average B/2 + F/2, add B + F, add-quarter B + F/4, subtract B - F. Surfaces see the
 	// opaque scene behind them, not each other (Godot's screen texture).
-	if (tex.a * col.a * tint.a < 0.5) {
+	float texel_alpha = tex.a * col.a * tint.a;
+	if (texel_alpha < 0.5) {
 		discard;
 	}
-	vec3 b = floor(psx_linear_to_srgb(texture(psx_background, SCREEN_UV).rgb) * 255.0 + 0.5);
+	// In STP mode, fully opaque texels lack the semi-transparency bit: drawn solid.
+	if (!stp_mode || texel_alpha < 0.999) {
+		// The background as the 15-bit framebuffer holds it.
+		vec3 b = floor(psx_linear_to_srgb(texture(psx_background, SCREEN_UV).rgb) * 255.0 + 0.5);
+		b = floor(b / step_size) * step_size;
 #if defined(PSX_SEMI_AVERAGE)
-	s = floor((b + s) * 0.5);
+		s = floor((b + s) * 0.5);
 #elif defined(PSX_SEMI_ADD)
-	s = b + s;
+		s = b + s;
 #elif defined(PSX_SEMI_ADD_QUARTER)
-	s = b + floor(s * 0.25);
+		s = b + floor(s * 0.25);
 #else
-	s = b - s;
+		s = b - s;
 #endif
-	s = floor(clamp(s, 0.0, 255.0) / step_size) * step_size;
+		s = floor(clamp(s, 0.0, 255.0) / step_size) * step_size;
+	}
 	ALPHA = 1.0;
 #endif
 	ALBEDO = psx_srgb_to_linear(s / 255.0);

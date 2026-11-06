@@ -28,6 +28,7 @@ extends Node
 ## Draw a legend in the corner.
 @export var show_legend := true
 
+var _ui_layer: CanvasLayer
 var _tinted := {}  # instance RID -> MeshInstance3D
 var _materials := {}  # colour key -> ShaderMaterial
 var _legend: Label
@@ -47,7 +48,9 @@ func _ready() -> void:
 		_legend.offset_left = -560
 		_legend.offset_top = 8
 		layer.add_child(_legend)
-		add_child(layer)
+		# On the root canvas: stays sharp under psx_screen.gd's low-resolution pass.
+		_ui_layer = layer
+		get_tree().root.add_child.call_deferred(layer)
 	_refresh()
 
 
@@ -109,3 +112,10 @@ func _material(c: Color) -> ShaderMaterial:
 		m.set_shader_parameter("tint", c)
 		_materials[key] = m
 	return _materials[key]
+
+
+## The overlay lives on the root canvas, not under this node: free it with the node. Not on
+## _exit_tree, which also runs when psx_screen.gd moves the scene into its viewport.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE and is_instance_valid(_ui_layer):
+		_ui_layer.queue_free()

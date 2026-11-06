@@ -44,6 +44,10 @@ impl ModelTab {
                     .on_hover_text("Experimental: versions with long edges split, which Godot scenes of static models show up close (like PS1 games did against affine texture warping).");
             });
             ui.horizontal(|ui| {
+                ui.checkbox(&mut self.export.ps1_sort, "PS1 sorting data")
+                    .on_hover_text("Store each triangle's centre, so the Godot PS1 materials' flat_depth sorts triangles by their average depth like the PS1. Triples the vertex count.");
+            });
+            ui.horizontal(|ui| {
                 ui.label("Scale");
                 ui.add(
                     egui::DragValue::new(&mut self.export.scale)
