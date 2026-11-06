@@ -70,6 +70,10 @@ jobs:
             Set-Content "$dir/README.txt" -NoNewline
           Copy-Item src/docs/GUIDE.md, src/AGENTS.md, src/CHANGELOG.md, src/LICENSE.md, src/THIRD_PARTY_LICENSES.html $dir
           Copy-Item -Recurse src/blender, src/godot $dir
+          # The Godot demo project, from versions that have it (0.12.0 on).
+          if (Test-Path src/examples/godot_demo) {
+            Copy-Item -Recurse src/examples/godot_demo "$dir/godot-demo"
+          }
           Compress-Archive -Path $dir -DestinationPath "dist/$name-windows-x64.zip"
           "ZIP=dist/$name-windows-x64.zip" >> $env:GITHUB_ENV
 
@@ -137,6 +141,8 @@ jobs:
           sed "s/@VERSION@/$VERSION/g" ci/packaging/macos/README.txt > "$dir/README.txt"
           cp src/docs/GUIDE.md src/AGENTS.md src/CHANGELOG.md src/LICENSE.md src/THIRD_PARTY_LICENSES.html "$dir/"
           cp -R src/blender src/godot "$dir/"
+          # The Godot demo project, from versions that have it (0.12.0 on).
+          if [ -d src/examples/godot_demo ]; then cp -R src/examples/godot_demo "$dir/godot-demo"; fi
           # ditto keeps the executable bit and the signature intact.
           (cd dist && ditto -c -k --keepParent "$name" "$name-macos-arm64.zip")
           echo "ZIP=dist/$name-macos-arm64.zip" >> "$GITHUB_ENV"

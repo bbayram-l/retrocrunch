@@ -40,6 +40,7 @@ psx_lights.gd lets Godot's lights light the PS1 materials, per vertex.
 For whole scenes, copy godot\addons\retrocrunch_budget into your project's addons
 folder and enable "Retrocrunch PS1 Budget" under Project Settings > Plugins. Its dock
 measures polygons in view and texture VRAM and suggests what to clip.
+To try all of it first, open the godot-demo folder in Godot and press Play.
 
 Files in this folder
 --------------------
@@ -49,6 +50,7 @@ Files in this folder
   CHANGELOG.md                 what changed in each version
   blender\                     the Blender add-on (MIT No Attribution)
   godot\                       Godot scripts, shaders and the PS1 Budget add-on (MIT No Attribution)
+  godot-demo\                  a Godot project to try them in (MIT No Attribution)
   LICENSE.md                   Retrocrunch's licence
   THIRD_PARTY_LICENSES.html    licences of the open-source libraries inside
 
