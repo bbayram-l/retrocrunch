@@ -6,6 +6,12 @@ All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format fo
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-06
+
+PS1 limits for whole Godot scenes, and PS1 rendering details for Godot: moving
+per-vertex lights, sorting without a z-buffer and the PS1's blend modes. Plus pixelised
+PBR material sets.
+
 ### Added
 - PBR material sets in the Texture tab. Opening any map of a set (`<name>_basecolor`,
   `_normal`/`_normalogl`, `_height`, `_ambientocclusion`, `_metallic`, `_roughness`,
@@ -40,8 +46,10 @@ All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format fo
   PS1 blend rules (B/2+F/2, B+F, B+F/4, B-F), computed on 8-bit values like the
   hardware (`psx_average/add/add_quarter/subtract.gdshader`).
 - Godot PS1 materials: `uv_scale` repeats a texture across plain meshes.
-- `examples/godot_demo`: a Godot project for trying the speed limit, the draw distance
-  and the budget dock on a street that's far over budget, with a fly camera.
+- `examples/godot_demo`: a Godot project with all of the above on a night street that's
+  far over budget: PS1 materials, lamps and a flashlight, the speed limit, draw
+  distance, near-detail road with the heatmap, the VRAM overlay and the budget dock,
+  with a fly camera and a key for every mode.
 
 ### Changed
 - Godot PS1 materials always write depth (for `flat_depth`), which turns off the GPU's
