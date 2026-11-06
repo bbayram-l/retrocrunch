@@ -6,6 +6,8 @@ All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format fo
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-06
+
 Closer to the PS1 hardware (as documented in psx-spx), with each big change behind a
 switch that's off by default. See "PS1 accuracy switches" in the guide.
 
