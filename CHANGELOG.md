@@ -31,10 +31,21 @@ All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format fo
 - Godot: `psx_vram_overlay.gd` draws a picture of PS1 video memory over the game: the
   textures on screen packed next to the framebuffers and colour tables, as a PS1 game
   would, with totals and what doesn't fit. Same packing as the `vram` command.
+- Godot: `psx_lights.gd` lets ordinary DirectionalLight3D, OmniLight3D and SpotLight3D
+  nodes light the PS1 materials, per vertex like the PS1's GTE (up to 8, nearest first,
+  up to 2x brightness), before the 15-bit colour and dither.
+- Godot PS1 materials: `flat_depth` gives each triangle one depth, so big polygons sort
+  as a whole like on a PS1 with no z-buffer; `depth_bias` nudges a material.
+- PS1 semi-transparency: materials named `..._avg`, `_add`, `_add25` or `_sub` get the
+  PS1 blend rules (B/2+F/2, B+F, B+F/4, B-F), computed on 8-bit values like the
+  hardware (`psx_average/add/add_quarter/subtract.gdshader`).
+- Godot PS1 materials: `uv_scale` repeats a texture across plain meshes.
 - `examples/godot_demo`: a Godot project for trying the speed limit, the draw distance
   and the budget dock on a street that's far over budget, with a fly camera.
 
 ### Changed
+- Godot PS1 materials always write depth (for `flat_depth`), which turns off the GPU's
+  early depth test for them; at PS1 scene sizes the cost is small.
 - The draw distance node and the budget dock skip LOD and near-detail versions outside
   their distance band, as Godot does; they counted every version before.
 - The budget dock's "To fit" line now gives the distance to draw up to and names only

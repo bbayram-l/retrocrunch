@@ -5,6 +5,9 @@ extends Node3D
 @onready var draw: Node = $DrawDistance
 @onready var heatmap: Node = $DetailHeatmap
 @onready var vram: Node = $VramOverlay
+@onready var flashlight: SpotLight3D = $Player/Flashlight
+
+var flat_depth := false
 
 var _help: Label
 
@@ -18,7 +21,7 @@ func _ready() -> void:
 	_help.anchor_top = 1.0
 	_help.anchor_bottom = 1.0
 	_help.offset_left = 8
-	_help.offset_top = -190
+	_help.offset_top = -210
 	layer.add_child(_help)
 	add_child(layer)
 
@@ -35,6 +38,9 @@ func _process(_delta: float) -> void:
 		],
 		"H: near-detail heatmap on the road (now: %s)   F3: VRAM overlay (now: %s)" % [
 			"on" if heatmap.enabled else "off", "on" if vram.visible else "off"
+		],
+		"F: flashlight (now: %s)   K: PS1 flat depth, no z-buffer (now: %s)" % [
+			"on" if flashlight.visible else "off", "on" if flat_depth else "off"
 		],
 	])
 
@@ -65,3 +71,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			heatmap.enabled = not heatmap.enabled
 			if heatmap.enabled and draw.mode == 1:
 				draw.mode = 0
+		KEY_F:
+			flashlight.visible = not flashlight.visible
+		KEY_K:
+			flat_depth = not flat_depth
+			for mi: MeshInstance3D in find_children("*", "MeshInstance3D", true, false):
+				for s in mi.mesh.get_surface_count():
+					var m := mi.get_active_material(s) as ShaderMaterial
+					if m:
+						m.set_shader_parameter("flat_depth", flat_depth)

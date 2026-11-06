@@ -44,7 +44,8 @@ the frame rate to what a PS1 could draw (60 fps up to 3000 polygons, 30 up to 60
 psx_draw_distance.gd (also a Node) cuts or tints everything beyond the distance where
 the view would pass a polygon budget, to see how far each scene can draw.
 psx_vram_overlay.gd shows PS1 video memory in the corner (F3), and
-psx_detail_heatmap.gd colours near-detail and LOD versions by their triangles.
+psx_detail_heatmap.gd colours near-detail and LOD versions by their triangles, and
+psx_lights.gd lets Godot's lights light the PS1 materials, per vertex.
 For whole scenes, copy godot/addons/retrocrunch_budget into your project's addons
 folder and enable "Retrocrunch PS1 Budget" under Project Settings > Plugins.
 

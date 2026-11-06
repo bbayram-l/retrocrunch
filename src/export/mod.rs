@@ -94,7 +94,7 @@ impl EnginePreset {
     pub fn import_notes(self) -> &'static str {
         match self {
             Self::Godot => {
-                "Godot 4: copy the folder into your project. Open the .tscn: every mesh already uses a psx_*.gdshader material (vertex snapping, affine UVs, dither, 15-bit colour, nearest filtering): psx_opaque, psx_cutout (alpha-tested) or psx_blend (translucent), with _double variants for double-sided materials. Shared code is in psx_common.gdshaderinc. Tweak 'snap_lines' on a material for more or less jitter. Keep the Environment tonemap on Linear for colours that match the retrocrunch preview.\n\nScreen pass (optional, recommended): add a Control with psx_screen.gd as your main scene's root UI node and put the 3D level (with its camera) under it. It renders at 240 lines, upscales with nearest filtering and does the PS1 dither + 15-bit once per virtual pixel (psx_post.gdshader), switching those off in the materials.\n\nPS1 speed (optional): add a Node with psx_speed_limit.gd inside the 3D scene. It counts the triangles drawn each frame and caps the frame rate like the PS1 GPU (180 textured polygons per ms): 60 fps up to 3000, 30 up to 6000, 20 up to 9000. Turn on show_stats to see the count.\n\nDraw distance (optional, debug): add a Node with psx_draw_distance.gd inside the 3D scene. It finds how far the camera can see before the objects in view pass a polygon budget (6000 by default) and cuts everything farther, or tints it red, so you can see how far each scene can draw.\n\nVRAM overlay (optional, debug): add a Node with psx_vram_overlay.gd. It packs the textures on screen into a picture of PS1 video memory (framebuffers, texture pages, colour tables) in the corner and says what doesn't fit; F3 shows and hides it.\n\nNear detail: models exported with tessellate have _near1.glb... versions with long edges split, which the .tscn shows up close, like PS1 games did against affine texture warping. Add a Node with psx_detail_heatmap.gd to colour them by how many triangles they add (yellow 2x to red 8x; LODs blue).\n\nThe .png.import files tell Godot to keep textures lossless and without VRAM compression, so the palette survives; HD textures (over 512 px) get mipmaps. The .glb.import files turn off Godot's automatic mesh LODs, so models are always drawn with the triangles you converted them to."
+                "Godot 4: copy the folder into your project. Open the .tscn: every mesh already uses a psx_*.gdshader material (vertex snapping, affine UVs, dither, 15-bit colour, nearest filtering): psx_opaque, psx_cutout (alpha-tested) or psx_blend (translucent), with _double variants for double-sided materials. Shared code is in psx_common.gdshaderinc. Tweak 'snap_lines' on a material for more or less jitter. Keep the Environment tonemap on Linear for colours that match the retrocrunch preview.\n\nScreen pass (optional, recommended): add a Control with psx_screen.gd as your main scene's root UI node and put the 3D level (with its camera) under it. It renders at 240 lines, upscales with nearest filtering and does the PS1 dither + 15-bit once per virtual pixel (psx_post.gdshader), switching those off in the materials.\n\nPS1 speed (optional): add a Node with psx_speed_limit.gd inside the 3D scene. It counts the triangles drawn each frame and caps the frame rate like the PS1 GPU (180 textured polygons per ms): 60 fps up to 3000, 30 up to 6000, 20 up to 9000. Turn on show_stats to see the count.\n\nDraw distance (optional, debug): add a Node with psx_draw_distance.gd inside the 3D scene. It finds how far the camera can see before the objects in view pass a polygon budget (6000 by default) and cuts everything farther, or tints it red, so you can see how far each scene can draw.\n\nVRAM overlay (optional, debug): add a Node with psx_vram_overlay.gd. It packs the textures on screen into a picture of PS1 video memory (framebuffers, texture pages, colour tables) in the corner and says what doesn't fit; F3 shows and hides it.\n\nNear detail: models exported with tessellate have _near1.glb... versions with long edges split, which the .tscn shows up close, like PS1 games did against affine texture warping. Add a Node with psx_detail_heatmap.gd to colour them by how many triangles they add (yellow 2x to red 8x; LODs blue).\n\nMoving lights (optional): the PSX materials are unshaded, so Godot's lights don't reach them. Add a Node with psx_lights.gd and light the scene with ordinary DirectionalLight3D, OmniLight3D and SpotLight3D nodes: up to 8 light each vertex, like the PS1's GTE.\n\nPS1 sorting: tick flat_depth on a material to give each triangle one depth, so big polygons sort as a whole like on a PS1 (no z-buffer); depth_bias nudges it. Semi-transparency: a material named ..._avg, _add, _add25 or _sub gets the PS1 blend mode (B/2+F/2, B+F, B+F/4, B-F, computed on 8-bit values like the hardware).\n\nThe .png.import files tell Godot to keep textures lossless and without VRAM compression, so the palette survives; HD textures (over 512 px) get mipmaps. The .glb.import files turn off Godot's automatic mesh LODs, so models are always drawn with the triangles you converted them to."
             }
             Self::Unity => {
                 "Unity: drop the .fbx (or .obj) and .png into Assets. For rigged models set Rig > Animation Type = Humanoid (or Generic) and apply. Select the PNG: Filter Mode = Point, Compression = None, Generate Mip Maps = off. Use an Unlit/Texture (or URP Unlit) material; vertex colours need a vertex-colour shader."
@@ -294,6 +294,7 @@ pub fn export_model(model: &Model, dir: &Path, s: &ExportSettings) -> Result<Vec
             ("psx_draw_distance.gd", GODOT_DRAW_DISTANCE_SCRIPT),
             ("psx_detail_heatmap.gd", GODOT_HEATMAP_SCRIPT),
             ("psx_vram_overlay.gd", GODOT_VRAM_OVERLAY_SCRIPT),
+            ("psx_lights.gd", GODOT_LIGHTS_SCRIPT),
         ] {
             let p = dir.join(name);
             std::fs::write(&p, text)?;
@@ -1160,6 +1161,14 @@ mod tests {
                 include_str!("../../godot/addons/retrocrunch_budget/plugin.cfg"),
                 include_str!("../../examples/godot_demo/addons/retrocrunch_budget/plugin.cfg"),
             ),
+            (
+                include_str!("../../godot/psx_common.gdshaderinc"),
+                include_str!("../../examples/godot_demo/psx_common.gdshaderinc"),
+            ),
+            (
+                include_str!("../../godot/psx_lights.gd"),
+                include_str!("../../examples/godot_demo/psx_lights.gd"),
+            ),
         ];
         for (i, (shipped, demo)) in pairs.iter().enumerate() {
             assert_eq!(
@@ -1168,6 +1177,50 @@ mod tests {
                 "examples/godot_demo copy #{i} is out of date: copy it from godot/"
             );
         }
+        // The demo's shader variants are what an export writes.
+        let variants = [
+            (
+                GodotVariant::default(),
+                include_str!("../../examples/godot_demo/psx_opaque.gdshader"),
+            ),
+            (
+                GodotVariant {
+                    alpha: AlphaKind::SemiAdd,
+                    double_sided: true,
+                },
+                include_str!("../../examples/godot_demo/psx_add_double.gdshader"),
+            ),
+        ];
+        for (v, demo) in variants {
+            assert_eq!(v.source(), demo.replace("\r\n", "\n"), "{}", v.file_name());
+        }
+    }
+
+    #[test]
+    fn material_names_pick_ps1_semi_transparency() {
+        for (name, kind) in [
+            ("glow_add", AlphaKind::SemiAdd),
+            ("Glow_ADD25", AlphaKind::SemiAddQuarter),
+            ("water_avg", AlphaKind::SemiAverage),
+            ("shadow_sub ", AlphaKind::SemiSubtract),
+        ] {
+            let m = Material {
+                name: name.into(),
+                ..Default::default()
+            };
+            assert_eq!(AlphaKind::of(&m), kind, "{name}");
+        }
+        // Other names keep the alpha-based choice; "_address" isn't "_add".
+        for name in ["addon", "glow_address", "sub_floor"] {
+            assert_eq!(AlphaKind::semi_from_name(name), None, "{name}");
+        }
+        let v = GodotVariant {
+            alpha: AlphaKind::SemiAdd,
+            double_sided: true,
+        };
+        assert_eq!(v.file_name(), "psx_add_double.gdshader");
+        let src = v.source();
+        assert!(src.contains("#define PSX_SEMI_ADD\n") && src.contains("blend_mix"));
     }
 
     #[test]
@@ -1218,6 +1271,7 @@ mod tests {
         assert!(dir.join("psx_draw_distance.gd").is_file());
         assert!(dir.join("psx_detail_heatmap.gd").is_file());
         assert!(dir.join("psx_vram_overlay.gd").is_file());
+        assert!(dir.join("psx_lights.gd").is_file());
         let import = std::fs::read_to_string(dir.join("ball_test.png.import")).unwrap();
         assert!(import.contains("compress/mode=0") && import.contains("mipmaps/generate=false"));
         let glb_import = std::fs::read_to_string(dir.join("ball_test.glb.import")).unwrap();

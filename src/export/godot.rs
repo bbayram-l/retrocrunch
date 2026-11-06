@@ -329,6 +329,7 @@ pub const GODOT_SPEED_SCRIPT: &str = include_str!("../../godot/psx_speed_limit.g
 pub const GODOT_DRAW_DISTANCE_SCRIPT: &str = include_str!("../../godot/psx_draw_distance.gd");
 pub const GODOT_HEATMAP_SCRIPT: &str = include_str!("../../godot/psx_detail_heatmap.gd");
 pub const GODOT_VRAM_OVERLAY_SCRIPT: &str = include_str!("../../godot/psx_vram_overlay.gd");
+pub const GODOT_LIGHTS_SCRIPT: &str = include_str!("../../godot/psx_lights.gd");
 
 /// How a material's alpha is drawn.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -339,10 +340,34 @@ pub enum AlphaKind {
     Cutout,
     /// Partial alpha (texture or base colour): alpha blending.
     Blend,
+    /// PS1 semi-transparency, chosen by a material name ending in `_avg`, `_add`,
+    /// `_add25` or `_sub`: background/2 + texture/2, background + texture, background +
+    /// texture/4, background - texture.
+    SemiAverage,
+    SemiAdd,
+    SemiAddQuarter,
+    SemiSubtract,
 }
 
 impl AlphaKind {
+    /// The PS1 semi-transparency mode a material's name asks for, if any.
+    pub fn semi_from_name(name: &str) -> Option<Self> {
+        let n = name.trim().to_ascii_lowercase();
+        [
+            ("_avg", Self::SemiAverage),
+            ("_add25", Self::SemiAddQuarter),
+            ("_add", Self::SemiAdd),
+            ("_sub", Self::SemiSubtract),
+        ]
+        .into_iter()
+        .find(|(suffix, _)| n.ends_with(suffix))
+        .map(|(_, kind)| kind)
+    }
+
     pub fn of(m: &crate::mesh::Material) -> Self {
+        if let Some(semi) = Self::semi_from_name(&m.name) {
+            return semi;
+        }
         if m.base_color[3] < 0.999 {
             return Self::Blend;
         }
@@ -387,6 +412,10 @@ impl GodotVariant {
             AlphaKind::Opaque => "opaque",
             AlphaKind::Cutout => "cutout",
             AlphaKind::Blend => "blend",
+            AlphaKind::SemiAverage => "average",
+            AlphaKind::SemiAdd => "add",
+            AlphaKind::SemiAddQuarter => "add_quarter",
+            AlphaKind::SemiSubtract => "subtract",
         };
         format!("psx_{a}{}", if self.double_sided { "_double" } else { "" })
     }
@@ -404,6 +433,26 @@ impl GodotVariant {
             AlphaKind::Opaque => ("opaque", "", ""),
             AlphaKind::Cutout => ("alpha-tested cutout", "#define PSX_CUTOUT\n", ""),
             AlphaKind::Blend => ("alpha-blended", "#define PSX_BLEND\n", ", blend_mix"),
+            AlphaKind::SemiAverage => (
+                "PS1 semi-transparency, average (B/2 + F/2)",
+                "#define PSX_SEMI_AVERAGE\n",
+                ", blend_mix",
+            ),
+            AlphaKind::SemiAdd => (
+                "PS1 semi-transparency, add (B + F)",
+                "#define PSX_SEMI_ADD\n",
+                ", blend_mix",
+            ),
+            AlphaKind::SemiAddQuarter => (
+                "PS1 semi-transparency, add a quarter (B + F/4)",
+                "#define PSX_SEMI_ADD_QUARTER\n",
+                ", blend_mix",
+            ),
+            AlphaKind::SemiSubtract => (
+                "PS1 semi-transparency, subtract (B - F)",
+                "#define PSX_SEMI_SUBTRACT\n",
+                ", blend_mix",
+            ),
         };
         let (sides, cull) = if self.double_sided {
             ("both faces drawn", "cull_disabled")

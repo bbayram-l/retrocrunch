@@ -22,9 +22,12 @@ func _initialize() -> void:
 	world.environment = env
 	_add(world, "Environment")
 
+	# Every surface uses retrocrunch's PS1 material (psx_opaque.gdshader), which is
+	# unshaded: these Godot lights reach it through the PS1Lights node, per vertex.
 	var moon := DirectionalLight3D.new()
 	moon.rotation_degrees = Vector3(-55, 35, 0)
-	moon.light_color = Color(0.8, 0.85, 1.0)
+	moon.light_color = Color(0.7, 0.75, 1.0)
+	moon.light_energy = 0.5
 	_add(moon, "Moon")
 
 	var brick := _material(_brick_texture(), Vector3(1, 1, 1))
@@ -112,6 +115,42 @@ func _initialize() -> void:
 			c.position = Vector3(0, 3.3, 0)
 			_add(c, "Crown", tree)
 
+	# Street lamps: warm point lights, and lamp heads in the PS1's additive
+	# semi-transparency (psx_add_double.gdshader), so they glow on what's behind them.
+	var post := CylinderMesh.new()
+	post.top_radius = 0.08
+	post.bottom_radius = 0.1
+	post.height = 4.0
+	post.radial_segments = 8
+	post.material = stone
+	var head := SphereMesh.new()
+	head.radius = 0.35
+	head.height = 0.7
+	head.radial_segments = 12
+	head.rings = 6
+	head.material = _material(null, Vector3.ONE, Color(0.55, 0.4, 0.2), "psx_add_double")
+	var lamps := Node3D.new()
+	_add(lamps, "Lamps")
+	for i in 13:
+		var side := -1 if i % 2 == 0 else 1
+		var lamp := Node3D.new()
+		lamp.position = Vector3(side * 9.0, 0, -4 - i * 24)
+		_add(lamp, "Lamp%d" % i, lamps)
+		var p := MeshInstance3D.new()
+		p.mesh = post
+		p.position = Vector3(0, 2, 0)
+		_add(p, "Post", lamp)
+		var h := MeshInstance3D.new()
+		h.mesh = head
+		h.position = Vector3(0, 4.1, 0)
+		_add(h, "Glow", lamp)
+		var light := OmniLight3D.new()
+		light.position = Vector3(0, 3.8, 0)
+		light.light_color = Color(1.0, 0.7, 0.4)
+		light.light_energy = 1.4
+		light.omni_range = 10.0
+		_add(light, "Light", lamp)
+
 	# One very detailed object far away: the dock should suggest clipping it.
 	var statue_mesh := SphereMesh.new()
 	statue_mesh.radius = 3.0
@@ -129,6 +168,16 @@ func _initialize() -> void:
 	cam.current = true
 	cam.set_script(load("res://fly_camera.gd"))
 	_add(cam, "Player")
+	var flashlight := SpotLight3D.new()
+	flashlight.light_color = Color(1.0, 0.95, 0.85)
+	flashlight.light_energy = 2.5
+	flashlight.spot_range = 25.0
+	# Wide and tilted down: lighting is per vertex, so a narrow cone falls between the
+	# vertices of big polygons (the subdivided road tiles up close catch it best).
+	flashlight.spot_angle = 30.0
+	flashlight.rotation_degrees = Vector3(-12, 0, 0)
+	flashlight.visible = false
+	_add(flashlight, "Flashlight", cam)
 
 	var limiter := Node.new()
 	limiter.set_script(load("res://psx_speed_limit.gd"))
@@ -149,6 +198,11 @@ func _initialize() -> void:
 	vram.set_script(load("res://psx_vram_overlay.gd"))
 	_add(vram, "VramOverlay")
 
+	var lights := Node.new()
+	lights.set_script(load("res://psx_lights.gd"))
+	lights.set("ambient", Color(0.3, 0.3, 0.38))
+	_add(lights, "PS1Lights")
+
 	var scene := PackedScene.new()
 	var err := scene.pack(demo)
 	if err == OK:
@@ -164,13 +218,16 @@ func _add(node: Node, node_name: String, parent: Node = null) -> void:
 	node.owner = demo
 
 
-func _material(tex: Texture2D, uv_scale: Vector3, color := Color.WHITE) -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.albedo_color = color
+## A retrocrunch PS1 material (the shaders an export writes). Tint and colours are sRGB
+## values, passed as Vector4 so Godot doesn't colour-convert them.
+func _material(tex: Texture2D, uv_scale: Vector3, color := Color.WHITE, shader := "psx_opaque") -> ShaderMaterial:
+	var m := ShaderMaterial.new()
+	m.shader = load("res://%s.gdshader" % shader)
+	m.set_shader_parameter("use_texture", tex != null)
 	if tex:
-		m.albedo_texture = tex
-		m.uv1_scale = uv_scale
-	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+		m.set_shader_parameter("albedo_texture", tex)
+	m.set_shader_parameter("uv_scale", Vector2(uv_scale.x, uv_scale.y))
+	m.set_shader_parameter("tint", Vector4(color.r, color.g, color.b, 1.0))
 	return m
 
 
