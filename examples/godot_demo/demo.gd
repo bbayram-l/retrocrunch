@@ -3,6 +3,8 @@ extends Node3D
 
 @onready var limiter: Node = $SpeedLimit
 @onready var draw: Node = $DrawDistance
+@onready var heatmap: Node = $DetailHeatmap
+@onready var vram: Node = $VramOverlay
 
 var _help: Label
 
@@ -16,7 +18,7 @@ func _ready() -> void:
 	_help.anchor_top = 1.0
 	_help.anchor_bottom = 1.0
 	_help.offset_left = 8
-	_help.offset_top = -150
+	_help.offset_top = -190
 	layer.add_child(_help)
 	add_child(layer)
 
@@ -31,6 +33,9 @@ func _process(_delta: float) -> void:
 		"L: PS1 speed limit (now: %s)   V: vsync steps (now: %s)" % [
 			"on" if limiter.enabled else "off", "on" if limiter.vsync_steps else "off"
 		],
+		"H: near-detail heatmap on the road (now: %s)   F3: VRAM overlay (now: %s)" % [
+			"on" if heatmap.enabled else "off", "on" if vram.visible else "off"
+		],
 	])
 
 
@@ -42,8 +47,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			draw.mode = 0
 		KEY_2:
 			draw.mode = 1
-			# Tint draws every cut object a second time, which the speed limit counts.
+			# Tint draws every cut object a second time, which the speed limit counts,
+			# and colours objects the same way as the heatmap.
 			limiter.enabled = false
+			heatmap.enabled = false
 		KEY_3:
 			draw.mode = 2
 		KEY_EQUAL, KEY_KP_ADD:
@@ -54,3 +61,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			limiter.enabled = not limiter.enabled
 		KEY_V:
 			limiter.vsync_steps = not limiter.vsync_steps
+		KEY_H:
+			heatmap.enabled = not heatmap.enabled
+			if heatmap.enabled and draw.mode == 1:
+				draw.mode = 0

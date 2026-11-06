@@ -22,10 +22,21 @@ All notable changes to Retrocrunch (called psx-forge up to 0.8.0). The format fo
 - The Godot PS1 Budget dock's limits are settings, saved per project: polygon budget,
   VRAM size (1, 2, 4 or 8 MB), framebuffers kept in VRAM (0, 1 or 2) and their
   resolution. Free texture memory follows from them (724 KB for the PS1 default).
+- Near-camera tessellation (`tessellate`, `--tessellate`, Export > Near detail; 0-3):
+  versions with long edges split (`<name>_near1.glb`...) that the Godot scene of a
+  static model shows up close, like PS1 games did against affine texture warping.
+  Each version's pieces carry their triangle ratio as metadata.
+- Godot: `psx_detail_heatmap.gd` colours near-detail and LOD versions by their triangles
+  against the converted model (yellow 2x to red 8x, blue for LODs).
+- Godot: `psx_vram_overlay.gd` draws a picture of PS1 video memory over the game: the
+  textures on screen packed next to the framebuffers and colour tables, as a PS1 game
+  would, with totals and what doesn't fit. Same packing as the `vram` command.
 - `examples/godot_demo`: a Godot project for trying the speed limit, the draw distance
   and the budget dock on a street that's far over budget, with a fly camera.
 
 ### Changed
+- The draw distance node and the budget dock skip LOD and near-detail versions outside
+  their distance band, as Godot does; they counted every version before.
 - The budget dock's "To fit" line now gives the distance to draw up to and names only
   the farthest few objects to clip; a big street listed over a hundred.
 

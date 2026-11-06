@@ -1,17 +1,23 @@
 //! Godot 4 output: the scene that instances the GLB with PSX materials (and LOD
 //! bands), shader variants per material, texture import settings, and sprite scenes.
 
-use super::{SpriteSheetInfo, lod_distance, sanitize, texture_file, unique_names};
+use super::{SpriteSheetInfo, lod_distance, near_distance, sanitize, texture_file, unique_names};
 use crate::mesh::Model;
 use std::fmt::Write as _;
 
 /// Godot 4 scene instancing the GLB with the PSX shader on every mesh.
 pub fn godot_scene(model: &Model) -> String {
-    godot_scene_lods(model, 0)
+    godot_scene_bands(model, &[], &[])
 }
 
-/// Godot scene; with `lods` > 0 (static models), LOD0..LODn instances switch by distance.
-pub fn godot_scene_lods(model: &Model, lods: u32) -> String {
+/// Godot scene. For static models with `lods` (from `lod_models`) or `nears` (from
+/// `near_models`), every version is an instance shown only within its distance band:
+/// NEARn..NEAR1 up close, then the model itself (LOD0), then LOD1..LODn. Pieces of the
+/// other versions carry `metadata/retrocrunch_tri_ratio` (triangles against the model's)
+/// for the detail heatmap.
+pub fn godot_scene_bands(model: &Model, lod_models: &[Model], near_models: &[Model]) -> String {
+    let lods = lod_models.len() as u32;
+    let nears = near_models.len() as u32;
     let base = sanitize(&model.name);
     let names = unique_names(model.pieces.iter().map(|p| p.name.clone()));
     let tex_files: Vec<Option<String>> = (0..model.materials.len())
@@ -28,12 +34,23 @@ pub fn godot_scene_lods(model: &Model, lods: u32) -> String {
         "[ext_resource type=\"PackedScene\" path=\"{base}.glb\" id=\"1_glb\"]"
     )
     .ok();
-    // LOD scenes only for static models (skinned meshes move under the skeleton).
-    let lods = if model.is_rigged() { 0 } else { lods };
+    // Distance bands only for static models (skinned meshes move under the skeleton).
+    let (lods, nears) = if model.is_rigged() {
+        (0, 0)
+    } else {
+        (lods, nears)
+    };
     for level in 1..=lods {
         writeln!(
             s,
             "[ext_resource type=\"PackedScene\" path=\"{base}_lod{level}.glb\" id=\"lod_{level}\"]"
+        )
+        .ok();
+    }
+    for k in 1..=nears {
+        writeln!(
+            s,
+            "[ext_resource type=\"PackedScene\" path=\"{base}_near{k}.glb\" id=\"near_{k}\"]"
         )
         .ok();
     }
@@ -102,7 +119,7 @@ pub fn godot_scene_lods(model: &Model, lods: u32) -> String {
         .ok();
         return s;
     }
-    if lods == 0 {
+    if lods == 0 && nears == 0 {
         writeln!(
             s,
             "[node name=\"{base}\" instance=ExtResource(\"1_glb\")]\n"
@@ -118,39 +135,86 @@ pub fn godot_scene_lods(model: &Model, lods: u32) -> String {
         }
         return s;
     }
-    // LODs: every level is an instance; its meshes show only within their distance band.
+    // Every version is an instance; its meshes show only within their distance band.
     writeln!(s, "[node name=\"{base}\" type=\"Node3D\"]\n").ok();
-    for level in 0..=lods {
-        let resource = if level == 0 {
-            "1_glb".to_string()
-        } else {
-            format!("lod_{level}")
-        };
+    for band in distance_bands(model, lods, nears) {
         writeln!(
             s,
-            "[node name=\"LOD{level}\" parent=\".\" instance=ExtResource(\"{resource}\")]\n"
+            "[node name=\"{}\" parent=\".\" instance=ExtResource(\"{}\")]\n",
+            band.node, band.resource
         )
         .ok();
-        let begin = if level == 0 {
-            0.0
-        } else {
-            lod_distance(model, level - 1)
+        let version = match band.level {
+            l if l > 0 => lod_models.get(l as usize - 1),
+            l if l < 0 => near_models.get((-l) as usize - 1),
+            _ => None,
         };
-        let end = if level == lods {
-            0.0
-        } else {
-            lod_distance(model, level)
-        };
-        for (p, name) in model.pieces.iter().zip(&names) {
+        for (i, (p, name)) in model.pieces.iter().zip(&names).enumerate() {
             let mi = p.material.unwrap_or(0).min(mats - 1);
             writeln!(
                 s,
-                "[node name=\"{name}\" parent=\"LOD{level}\"]\nmaterial_override = SubResource(\"mat_{mi}\")\nvisibility_range_begin = {begin}\nvisibility_range_end = {end}\n"
+                "[node name=\"{name}\" parent=\"{}\"]\nmaterial_override = SubResource(\"mat_{mi}\")\nvisibility_range_begin = {}\nvisibility_range_end = {}",
+                band.node, band.begin, band.end
             )
             .ok();
+            if let Some(v) = version.and_then(|v| v.pieces.get(i)) {
+                let ratio = v.tri_count() as f32 / p.tri_count().max(1) as f32;
+                writeln!(s, "metadata/retrocrunch_tri_ratio = {ratio:.3}").ok();
+            }
+            s.push('\n');
         }
     }
     s
+}
+
+/// One distance band of a scene: which version shows between `begin` and `end` (0 = no
+/// limit). `level` is 0 for the model itself, n for LODn and -k for NEARk.
+struct Band {
+    node: String,
+    resource: String,
+    level: i32,
+    begin: f32,
+    end: f32,
+}
+
+/// Bands from the camera outwards: NEARn..NEAR1, LOD0, LOD1..LODn.
+fn distance_bands(model: &Model, lods: u32, nears: u32) -> Vec<Band> {
+    let mut out = Vec::new();
+    for k in (1..=nears).rev() {
+        out.push(Band {
+            node: format!("NEAR{k}"),
+            resource: format!("near_{k}"),
+            level: -(k as i32),
+            begin: if k == nears {
+                0.0
+            } else {
+                near_distance(model, k + 1)
+            },
+            end: near_distance(model, k),
+        });
+    }
+    for level in 0..=lods {
+        out.push(Band {
+            node: format!("LOD{level}"),
+            resource: if level == 0 {
+                "1_glb".to_string()
+            } else {
+                format!("lod_{level}")
+            },
+            level: level as i32,
+            begin: match level {
+                0 if nears > 0 => near_distance(model, 1),
+                0 => 0.0,
+                l => lod_distance(model, l - 1),
+            },
+            end: if level == lods {
+                0.0
+            } else {
+                lod_distance(model, level)
+            },
+        });
+    }
+    out
 }
 
 pub const GODOT_BILLBOARD_SCRIPT_NAME: &str = "psx_billboard.gd";
@@ -263,6 +327,8 @@ pub const GODOT_SCREEN_SCRIPT: &str = include_str!("../../godot/psx_screen.gd");
 pub const GODOT_POST_SHADER: &str = include_str!("../../godot/psx_post.gdshader");
 pub const GODOT_SPEED_SCRIPT: &str = include_str!("../../godot/psx_speed_limit.gd");
 pub const GODOT_DRAW_DISTANCE_SCRIPT: &str = include_str!("../../godot/psx_draw_distance.gd");
+pub const GODOT_HEATMAP_SCRIPT: &str = include_str!("../../godot/psx_detail_heatmap.gd");
+pub const GODOT_VRAM_OVERLAY_SCRIPT: &str = include_str!("../../godot/psx_vram_overlay.gd");
 
 /// How a material's alpha is drawn.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]

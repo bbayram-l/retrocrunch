@@ -152,6 +152,9 @@ pub struct ModelOptions {
     pub rigid: String,
     /// Extra half-resolution levels of detail (0-4).
     pub lods: u32,
+    /// Near-camera tessellation levels (0-3): versions with long edges split that
+    /// Godot scenes of static models show up close.
+    pub tessellate: u32,
     /// Keep more triangles/texels on the automatically found head (default on).
     pub focus_face: bool,
     /// Focus strength (default 4; 1 = off).
@@ -186,6 +189,7 @@ impl Default for ModelOptions {
             remesh: false,
             rigid: "off".into(),
             lods: 0,
+            tessellate: 0,
             focus_face: true,
             focus_strength: None,
         }
@@ -259,6 +263,9 @@ pub fn convert_model(o: &ModelOptions, progress: process::Progress) -> Result<Va
     es.preview = o.preview;
     if o.lods > 0 {
         es.lods = o.lods.min(4);
+    }
+    if o.tessellate > 0 {
+        es.tessellate = o.tessellate.min(export::MAX_TESSELLATE);
     }
     let dir = o.output_dir.join(export::sanitize(&model.name));
     let files = export::export_model(&c.model, &dir, &es)?;

@@ -28,18 +28,43 @@ func _initialize() -> void:
 	_add(moon, "Moon")
 
 	var brick := _material(_brick_texture(), Vector3(1, 1, 1))
-	var road := _material(_road_texture(), Vector3(6, 32, 1))
+	var road := _material(_road_texture(), Vector3(6, 2, 1))
 	var bark := _material(null, Vector3.ONE, Color(0.35, 0.22, 0.12))
 	var leaves := _material(null, Vector3.ONE, Color(0.2, 0.5, 0.25))
 	var stone := _material(null, Vector3.ONE, Color(0.75, 0.72, 0.65))
 
-	var ground_mesh := PlaneMesh.new()
-	ground_mesh.size = Vector2(60, 320)
-	ground_mesh.material = road
-	var ground := MeshInstance3D.new()
-	ground.mesh = ground_mesh
-	ground.position = Vector3(0, 0, -150)
-	_add(ground, "Road")
+	# The road in 20 m tiles, each with near-detail versions like a retrocrunch export
+	# with tessellate = 2: the plain tile (2 triangles) from 30 m, 4x the triangles from
+	# 15 m, 16x up close. Godot shows each only within its band; the metadata is what the
+	# heatmap colours by.
+	var bands := [
+		# [name, subdivisions, triangle ratio, begin, end]
+		["NEAR2", 3, 16.0, 0.0, 15.0],
+		["NEAR1", 1, 4.0, 15.0, 30.0],
+		["LOD0", 0, 1.0, 30.0, 0.0],
+	]
+	var tile_meshes := {}
+	for b in bands:
+		var m := PlaneMesh.new()
+		m.size = Vector2(60, 20)
+		m.subdivide_width = b[1]
+		m.subdivide_depth = b[1]
+		m.material = road
+		tile_meshes[b[0]] = m
+	var road_node := Node3D.new()
+	_add(road_node, "Road")
+	for i in 16:
+		var tile := Node3D.new()
+		tile.position = Vector3(0, 0, 10 - i * 20)
+		_add(tile, "Tile%d" % i, road_node)
+		for b in bands:
+			var v := MeshInstance3D.new()
+			v.mesh = tile_meshes[b[0]]
+			v.visibility_range_begin = b[3]
+			v.visibility_range_end = b[4]
+			if b[2] != 1.0:
+				v.set_meta("retrocrunch_tri_ratio", b[2])
+			_add(v, b[0], tile)
 
 	# Buildings: cheap boxes (12 triangles), a few shared sizes.
 	var boxes: Array[BoxMesh] = []
@@ -114,6 +139,15 @@ func _initialize() -> void:
 	draw.set_script(load("res://psx_draw_distance.gd"))
 	draw.set("show_stats", true)
 	_add(draw, "DrawDistance")
+
+	var heatmap := Node.new()
+	heatmap.set_script(load("res://psx_detail_heatmap.gd"))
+	heatmap.set("enabled", false)
+	_add(heatmap, "DetailHeatmap")
+
+	var vram := Node.new()
+	vram.set_script(load("res://psx_vram_overlay.gd"))
+	_add(vram, "VramOverlay")
 
 	var scene := PackedScene.new()
 	var err := scene.pack(demo)

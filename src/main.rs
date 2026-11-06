@@ -281,6 +281,10 @@ struct ModelArgs {
     /// Extra levels of detail, each half the triangles (Godot scenes switch by distance).
     #[arg(long, default_value_t = 0)]
     lods: u32,
+    /// Near-camera tessellation levels (0-3): long edges split in versions Godot shows
+    /// up close, against affine texture warping (static models).
+    #[arg(long, default_value_t = 0)]
+    tessellate: u32,
     /// How much extra detail the face keeps [default: 4; 1 = off].
     #[arg(long)]
     focus_strength: Option<f32>,
@@ -560,6 +564,7 @@ fn main() -> Result<()> {
                 focus_face: !a.no_face_focus,
                 rigid: a.rigid,
                 lods: a.lods,
+                tessellate: a.tessellate,
                 focus_strength: a.focus_strength,
             };
             ops::convert_model(&o, &progress)?

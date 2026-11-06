@@ -69,7 +69,7 @@ func _process(_delta: float) -> void:
 		if mi.mesh == null or not mi.is_visible_in_tree():
 			continue
 		var box: AABB = mi.global_transform * mi.get_aabb()
-		if not _in_frustum(box, planes):
+		if not _in_frustum(box, planes) or not in_visibility_range(mi, box, eye):
 			continue
 		in_view.append([_nearest_distance(box, eye), mi])
 	in_view.sort_custom(func(a, b): return a[0] < b[0])
@@ -157,6 +157,15 @@ func _triangles(mesh: Mesh) -> int:
 
 
 ## Distance from the eye to the nearest point of the box (0 inside it).
+## False when the object's visibility range (LOD and near-detail bands) hides it from
+## `eye`. Godot measures that range to the centre of the object's bounding box.
+static func in_visibility_range(gi: GeometryInstance3D, box: AABB, eye: Vector3) -> bool:
+	var d := eye.distance_to(box.get_center())
+	if gi.visibility_range_begin > 0.0 and d < gi.visibility_range_begin:
+		return false
+	return gi.visibility_range_end <= 0.0 or d < gi.visibility_range_end
+
+
 static func _nearest_distance(box: AABB, eye: Vector3) -> float:
 	return eye.distance_to(eye.clamp(box.position, box.end))
 

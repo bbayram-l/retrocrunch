@@ -94,7 +94,7 @@ impl EnginePreset {
     pub fn import_notes(self) -> &'static str {
         match self {
             Self::Godot => {
-                "Godot 4: copy the folder into your project. Open the .tscn: every mesh already uses a psx_*.gdshader material (vertex snapping, affine UVs, dither, 15-bit colour, nearest filtering): psx_opaque, psx_cutout (alpha-tested) or psx_blend (translucent), with _double variants for double-sided materials. Shared code is in psx_common.gdshaderinc. Tweak 'snap_lines' on a material for more or less jitter. Keep the Environment tonemap on Linear for colours that match the retrocrunch preview.\n\nScreen pass (optional, recommended): add a Control with psx_screen.gd as your main scene's root UI node and put the 3D level (with its camera) under it. It renders at 240 lines, upscales with nearest filtering and does the PS1 dither + 15-bit once per virtual pixel (psx_post.gdshader), switching those off in the materials.\n\nPS1 speed (optional): add a Node with psx_speed_limit.gd inside the 3D scene. It counts the triangles drawn each frame and caps the frame rate like the PS1 GPU (180 textured polygons per ms): 60 fps up to 3000, 30 up to 6000, 20 up to 9000. Turn on show_stats to see the count.\n\nDraw distance (optional, debug): add a Node with psx_draw_distance.gd inside the 3D scene. It finds how far the camera can see before the objects in view pass a polygon budget (6000 by default) and cuts everything farther, or tints it red, so you can see how far each scene can draw.\n\nThe .png.import files tell Godot to keep textures lossless and without VRAM compression, so the palette survives; HD textures (over 512 px) get mipmaps. The .glb.import files turn off Godot's automatic mesh LODs, so models are always drawn with the triangles you converted them to."
+                "Godot 4: copy the folder into your project. Open the .tscn: every mesh already uses a psx_*.gdshader material (vertex snapping, affine UVs, dither, 15-bit colour, nearest filtering): psx_opaque, psx_cutout (alpha-tested) or psx_blend (translucent), with _double variants for double-sided materials. Shared code is in psx_common.gdshaderinc. Tweak 'snap_lines' on a material for more or less jitter. Keep the Environment tonemap on Linear for colours that match the retrocrunch preview.\n\nScreen pass (optional, recommended): add a Control with psx_screen.gd as your main scene's root UI node and put the 3D level (with its camera) under it. It renders at 240 lines, upscales with nearest filtering and does the PS1 dither + 15-bit once per virtual pixel (psx_post.gdshader), switching those off in the materials.\n\nPS1 speed (optional): add a Node with psx_speed_limit.gd inside the 3D scene. It counts the triangles drawn each frame and caps the frame rate like the PS1 GPU (180 textured polygons per ms): 60 fps up to 3000, 30 up to 6000, 20 up to 9000. Turn on show_stats to see the count.\n\nDraw distance (optional, debug): add a Node with psx_draw_distance.gd inside the 3D scene. It finds how far the camera can see before the objects in view pass a polygon budget (6000 by default) and cuts everything farther, or tints it red, so you can see how far each scene can draw.\n\nVRAM overlay (optional, debug): add a Node with psx_vram_overlay.gd. It packs the textures on screen into a picture of PS1 video memory (framebuffers, texture pages, colour tables) in the corner and says what doesn't fit; F3 shows and hides it.\n\nNear detail: models exported with tessellate have _near1.glb... versions with long edges split, which the .tscn shows up close, like PS1 games did against affine texture warping. Add a Node with psx_detail_heatmap.gd to colour them by how many triangles they add (yellow 2x to red 8x; LODs blue).\n\nThe .png.import files tell Godot to keep textures lossless and without VRAM compression, so the palette survives; HD textures (over 512 px) get mipmaps. The .glb.import files turn off Godot's automatic mesh LODs, so models are always drawn with the triangles you converted them to."
             }
             Self::Unity => {
                 "Unity: drop the .fbx (or .obj) and .png into Assets. For rigged models set Rig > Animation Type = Humanoid (or Generic) and apply. Select the PNG: Filter Mode = Point, Compression = None, Generate Mip Maps = off. Use an Unlit/Texture (or URP Unlit) material; vertex colours need a vertex-colour shader."
@@ -133,6 +133,11 @@ pub struct ExportSettings {
     /// distance (visibility ranges). 0 = off.
     #[serde(default)]
     pub lods: u32,
+    /// Near-camera tessellation: extra versions with long edges split (`<name>_near1.glb`,
+    /// ...) that Godot scenes of static models switch to up close, like PS1 games split
+    /// big polygons near the camera to hide affine texture warping. 0 = off, max 3.
+    #[serde(default)]
+    pub tessellate: u32,
 }
 
 fn yes() -> bool {
@@ -152,6 +157,7 @@ impl Default for ExportSettings {
             preview: true,
             fbx: false,
             lods: 0,
+            tessellate: 0,
         }
     }
 }
@@ -226,13 +232,19 @@ pub fn export_model(model: &Model, dir: &Path, s: &ExportSettings) -> Result<Vec
         written.push(p.with_extension("mtl"));
     }
     let mut warnings: Vec<String> = Vec::new();
-    let lod_count = s.lods.min(4);
+    let lods = lod_models(model, s.lods.min(4));
+    // Near-camera versions only for static models, like the LOD scenes.
+    let nears = if model.is_rigged() {
+        Vec::new()
+    } else {
+        near_models(model, s.tessellate.min(MAX_TESSELLATE))
+    };
     if s.glb || s.godot_scene || s.fbx {
         let p = dir.join(format!("{base}.glb"));
         std::fs::write(&p, glb_bytes(model, s.unlit)?)?;
-        for lod in lod_models(model, lod_count) {
+        for lod in lods.iter().chain(&nears) {
             let lp = dir.join(format!("{}.glb", sanitize(&lod.name)));
-            std::fs::write(&lp, glb_bytes(&lod, s.unlit)?)?;
+            std::fs::write(&lp, glb_bytes(lod, s.unlit)?)?;
             written.push(lp);
         }
         if s.fbx {
@@ -280,6 +292,8 @@ pub fn export_model(model: &Model, dir: &Path, s: &ExportSettings) -> Result<Vec
             ("psx_post.gdshader", GODOT_POST_SHADER),
             ("psx_speed_limit.gd", GODOT_SPEED_SCRIPT),
             ("psx_draw_distance.gd", GODOT_DRAW_DISTANCE_SCRIPT),
+            ("psx_detail_heatmap.gd", GODOT_HEATMAP_SCRIPT),
+            ("psx_vram_overlay.gd", GODOT_VRAM_OVERLAY_SCRIPT),
         ] {
             let p = dir.join(name);
             std::fs::write(&p, text)?;
@@ -293,7 +307,7 @@ pub fn export_model(model: &Model, dir: &Path, s: &ExportSettings) -> Result<Vec
             }
         }
         let p = dir.join(format!("{base}.tscn"));
-        std::fs::write(&p, godot_scene_lods(model, lod_count))?;
+        std::fs::write(&p, godot_scene_bands(model, &lods, &nears))?;
         written.push(p);
         if model.is_rigged() {
             let gd = dir.join(GODOT_APPLY_SCRIPT_NAME);
@@ -714,6 +728,56 @@ pub fn lod_models(model: &Model, count: u32) -> Vec<Model> {
     out
 }
 
+/// Most near-camera tessellation levels.
+pub const MAX_TESSELLATE: u32 = 3;
+/// A tessellated version takes over when the camera is closer than this many times the
+/// longest edge it splits: such a polygon then covers about a third of the screen,
+/// where affine texture warping shows.
+const NEAR_EDGE_FACTOR: f32 = 3.0;
+
+/// Longest edge in the model (world units).
+fn longest_edge(model: &Model) -> f32 {
+    model
+        .pieces
+        .iter()
+        .flat_map(|p| {
+            p.indices.chunks_exact(3).flat_map(move |t| {
+                (0..3).map(move |k| {
+                    let a = p.vertices[t[k] as usize].pos;
+                    let b = p.vertices[t[(k + 1) % 3] as usize].pos;
+                    a.distance(b)
+                })
+            })
+        })
+        .fold(0.0, f32::max)
+}
+
+/// Near-camera versions `<name>_near1..`: level `k` splits every edge longer than the
+/// model's longest edge / 2^k, so big polygons are divided and small ones stay as they are.
+pub fn near_models(model: &Model, count: u32) -> Vec<Model> {
+    let longest = longest_edge(model);
+    if longest <= 0.0 {
+        return Vec::new();
+    }
+    (1..=count.min(MAX_TESSELLATE))
+        .map(|k| {
+            let mut m = model.clone();
+            m.name = format!("{}_near{k}", model.name);
+            for p in &mut m.pieces {
+                let cap =
+                    (p.tri_count() * 4usize.pow(k + 1)).min(crate::process::MAX_SUBDIVIDED_TRIS);
+                p.subdivide(longest / 2f32.powi(k as i32), cap);
+            }
+            m
+        })
+        .collect()
+}
+
+/// Distance (world units) inside which near version `k` (1-based) replaces version `k - 1`.
+pub fn near_distance(model: &Model, k: u32) -> f32 {
+    longest_edge(model) / 2f32.powi(k as i32 - 1) * NEAR_EDGE_FACTOR
+}
+
 /// Distance (world units) where LOD `i` hands over to LOD `i + 1`.
 pub fn lod_distance(model: &Model, i: u32) -> f32 {
     let (lo, hi) = model.bounds();
@@ -800,6 +864,65 @@ mod tests {
         let d0 = lod_distance(&m, 0);
         assert!(scene.contains(&format!("visibility_range_end = {d0}")));
         assert!(scene.contains(&format!("visibility_range_begin = {d0}")));
+    }
+
+    #[test]
+    fn tessellated_versions_split_long_edges_and_show_up_close() {
+        // A coarse sphere: long edges that the near versions must split.
+        let mut m = model();
+        m.pieces[0] = crate::mesh::tests::uv_sphere(8);
+        m.pieces[0].material = Some(0);
+        let dir = std::env::temp_dir().join("retrocrunch_near_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let s = ExportSettings {
+            lods: 1,
+            tessellate: 2,
+            ..Default::default()
+        };
+        export_model(&m, &dir, &s).unwrap();
+        let load = |f: &str| Model::load(&dir.join(f)).unwrap();
+        let (base, near1, near2) = (
+            load("ball_test.glb"),
+            load("ball_test_near1.glb"),
+            load("ball_test_near2.glb"),
+        );
+        assert!(base.tri_count() < near1.tri_count() && near1.tri_count() < near2.tri_count());
+        let longest = longest_edge(&base);
+        assert!(longest_edge(&near1) <= longest / 2.0 + 1e-4);
+        assert!(longest_edge(&near2) <= longest / 4.0 + 1e-4);
+        assert!(dir.join("ball_test_near2.glb.import").is_file());
+
+        // Bands from the camera outwards: NEAR2 [0, d2), NEAR1 [d2, d1), LOD0 [d1, l0),
+        // LOD1 [l0, -).
+        let scene = std::fs::read_to_string(dir.join("ball_test.tscn")).unwrap();
+        let order: Vec<usize> = ["\"NEAR2\"", "\"NEAR1\"", "\"LOD0\"", "\"LOD1\""]
+            .iter()
+            .map(|n| scene.find(&format!("[node name={n} parent=\".\"")).unwrap())
+            .collect();
+        assert!(
+            order.windows(2).all(|w| w[0] < w[1]),
+            "band order {order:?}"
+        );
+        let (d1, d2, l0) = (
+            near_distance(&m, 1),
+            near_distance(&m, 2),
+            lod_distance(&m, 0),
+        );
+        assert!(d2 < d1 && d1 < l0);
+        for (begin, end) in [(0.0, d2), (d2, d1), (d1, l0), (l0, 0.0)] {
+            let band = format!("visibility_range_begin = {begin}\nvisibility_range_end = {end}");
+            assert!(scene.contains(&band), "missing band {begin}..{end}");
+        }
+        assert!(scene.contains("metadata/retrocrunch_tri_ratio = "));
+
+        // Rigged models get no near versions (skinned meshes move under the skeleton).
+        let rigged = rigged_model();
+        assert!(rigged.is_rigged());
+        let files = export_model(&rigged, &dir.join("rigged"), &s).unwrap();
+        assert!(!files.iter().any(|f| {
+            f.file_name()
+                .is_some_and(|n| n.to_string_lossy().contains("_near"))
+        }));
     }
 
     #[test]
@@ -1014,6 +1137,14 @@ mod tests {
                 include_str!("../../examples/godot_demo/psx_draw_distance.gd"),
             ),
             (
+                include_str!("../../godot/psx_detail_heatmap.gd"),
+                include_str!("../../examples/godot_demo/psx_detail_heatmap.gd"),
+            ),
+            (
+                include_str!("../../godot/psx_vram_overlay.gd"),
+                include_str!("../../examples/godot_demo/psx_vram_overlay.gd"),
+            ),
+            (
                 include_str!("../../godot/addons/retrocrunch_budget/budget.gd"),
                 include_str!("../../examples/godot_demo/addons/retrocrunch_budget/budget.gd"),
             ),
@@ -1085,6 +1216,8 @@ mod tests {
         assert!(dir.join("psx_screen.gd").is_file());
         assert!(dir.join("psx_speed_limit.gd").is_file());
         assert!(dir.join("psx_draw_distance.gd").is_file());
+        assert!(dir.join("psx_detail_heatmap.gd").is_file());
+        assert!(dir.join("psx_vram_overlay.gd").is_file());
         let import = std::fs::read_to_string(dir.join("ball_test.png.import")).unwrap();
         assert!(import.contains("compress/mode=0") && import.contains("mipmaps/generate=false"));
         let glb_import = std::fs::read_to_string(dir.join("ball_test.glb.import")).unwrap();

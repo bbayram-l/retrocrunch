@@ -81,7 +81,7 @@ Ready-made palettes: `palettes {}` lists 10 built-ins (PICO-8, Sweetie 16, DawnB
 
 | engine | writes |
 |---|---|
-| `godot` | `.glb`, indexed `.png` + `.png.import` (lossless, no VRAM compression), `.tscn` with the PSX material already assigned (rigged scenes use `psx_apply_materials.gd`), `psx_{opaque,cutout,blend}[_double].gdshader` + `psx_common.gdshaderinc` picked per material, the optional 240-line screen pass `psx_screen.gd` + `psx_post.gdshader`, `psx_speed_limit.gd` (caps the frame rate to PS1 GPU speed from the triangles drawn) and `psx_draw_distance.gd` (cuts or tints everything past the distance where the view passes a polygon budget) |
+| `godot` | `.glb`, indexed `.png` + `.png.import` (lossless, no VRAM compression), `.tscn` with the PSX material already assigned (rigged scenes use `psx_apply_materials.gd`), `psx_{opaque,cutout,blend}[_double].gdshader` + `psx_common.gdshaderinc` picked per material, the optional 240-line screen pass `psx_screen.gd` + `psx_post.gdshader`, `psx_speed_limit.gd` (caps the frame rate to PS1 GPU speed from the triangles drawn) `psx_draw_distance.gd` (cuts or tints everything past the distance where the view passes a polygon budget), `psx_vram_overlay.gd` (in-game picture of PS1 VRAM with the textures on screen) and `psx_detail_heatmap.gd` (colours near-detail and LOD versions by their triangle ratio) |
 | `unity` | `.fbx` via Blender (OBJ if Blender is missing), `.png` |
 | `unreal` | `.glb` at 100x scale |
 | `blender`, `generic` | `.glb` (+ `.obj` for generic) |
@@ -96,7 +96,9 @@ docs/GUIDE.md, "Scene budget dock").
 ## Experimental options
 
 - `convert_model`: `lods` (0-4) writes half-resolution LOD GLBs, and Godot scenes of
-  static models switch between them by distance. `rigid`: `"one-bone"` (stiff joints,
+  static models switch between them by distance. `tessellate` (0-3) writes near-camera
+  versions with long edges split (`_near1.glb`...) that Godot scenes show up close,
+  against affine texture warping. `rigid`: `"one-bone"` (stiff joints,
   closed mesh) or `"segments"` (solid blocks per bone, seams) for rigged models.
 - `build_blocks`: `light: {}` bakes AO + sun shadows into the level's vertex colours
   (fields: ao, ao_strength, sun, sun_yaw, sun_pitch, sun_strength, ambient).

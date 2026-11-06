@@ -29,6 +29,15 @@ static func analyze(root: Node, camera: Camera3D, target_polys: int) -> Dictiona
 	for mi: MeshInstance3D in root.find_children("*", "MeshInstance3D", true, false):
 		if mi.mesh == null or not mi.is_visible_in_tree():
 			continue
+		var box: AABB = mi.global_transform * mi.get_aabb()
+		# LOD and near-detail versions show only within their distance band. With a camera,
+		# skip the ones Godot isn't drawing from there; without one, count each model once,
+		# at its converted detail (the versions carry a triangle ratio).
+		if camera:
+			if not _in_visibility_range(mi, box, camera.global_position):
+				continue
+		elif mi.has_meta("retrocrunch_tri_ratio"):
+			continue
 		var counts := mesh_counts(mi.mesh)
 		var tex_list: Array[Texture2D] = []
 		for s in mi.mesh.get_surface_count():
@@ -37,7 +46,6 @@ static func analyze(root: Node, camera: Camera3D, target_polys: int) -> Dictiona
 					tex_list.append(t)
 				if not textures.has(t):
 					textures[t] = texture_info(t)
-		var box: AABB = mi.global_transform * mi.get_aabb()
 		var o := {
 			"node": mi,
 			"name": str(root.get_path_to(mi)) if root != mi else str(mi.name),
@@ -244,6 +252,15 @@ static func _count_colors(rgba: PackedByteArray, cap: int) -> int:
 		if seen.size() >= cap:
 			return cap
 	return seen.size()
+
+
+## False when the object's visibility range hides it from `eye`. Godot measures that
+## range to the centre of the object's bounding box.
+static func _in_visibility_range(gi: GeometryInstance3D, box: AABB, eye: Vector3) -> bool:
+	var d := eye.distance_to(box.get_center())
+	if gi.visibility_range_begin > 0.0 and d < gi.visibility_range_begin:
+		return false
+	return gi.visibility_range_end <= 0.0 or d < gi.visibility_range_end
 
 
 static func _in_frustum(box: AABB, planes: Array[Plane]) -> bool:

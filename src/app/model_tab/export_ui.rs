@@ -40,6 +40,8 @@ impl ModelTab {
             ui.horizontal(|ui| {
                 ui.add(egui::DragValue::new(&mut self.export.lods).range(0..=4).prefix("LODs "))
                     .on_hover_text("Experimental: extra levels of detail, each with half the triangles. Godot scenes of static models switch between them by distance.");
+                ui.add(egui::DragValue::new(&mut self.export.tessellate).range(0..=3).prefix("Near detail "))
+                    .on_hover_text("Experimental: versions with long edges split, which Godot scenes of static models show up close (like PS1 games did against affine texture warping).");
             });
             ui.horizontal(|ui| {
                 ui.label("Scale");

@@ -1,10 +1,18 @@
-; Retrocrunch PS1 budget demo. Open this folder in Godot 4 (tested with 4.7.2).
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
 config_version=5
 
 [application]
 
 config/name="Retrocrunch PS1 Budget Demo"
 run/main_scene="res://demo.tscn"
+config/features=PackedStringArray("4.7")
 
 [display]
 
